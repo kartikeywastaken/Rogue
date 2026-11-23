@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,7 +13,7 @@ import (
 	"rogue/internal/engine"
 )
 
-// scripted is an instant engine so tests don't depend on the mock's timing.
+// scripted is a test-only engine with deterministic events and no network calls.
 type scripted struct{ events []engine.Event }
 
 func (scripted) Name() string     { return "test" }
@@ -149,7 +148,7 @@ func TestSlashPaletteAndCommands(t *testing.T) {
 }
 
 func TestEscInterruptsAndDropsStaleEvents(t *testing.T) {
-	m := sized(engine.NewMock(), 110, 34)
+	m := sized(scripted{}, 110, 34)
 	m = typeText(m, "go")
 	m, _ = press(m, tea.KeyEnter)
 	old := m.events
@@ -163,20 +162,11 @@ func TestEscInterruptsAndDropsStaleEvents(t *testing.T) {
 	}
 }
 
-func TestMockSessionFrame(t *testing.T) {
-	m := sized(engine.NewMock(), 110, 34)
+func TestSessionFrame(t *testing.T) {
+	m := sized(scripted{events: []engine.Event{{Kind: engine.KindText, Text: "Assessment complete."}, {Kind: engine.KindDone}}}, 110, 34)
 	m = typeText(m, "what's in this repo?")
 	m, _ = press(m, tea.KeyEnter)
-	deadline := time.After(10 * time.Second)
-	for m.running {
-		select {
-		case <-deadline:
-			t.Fatal("mock turn too slow")
-		default:
-		}
-		next, _ := m.Update(waitFor(m.events)())
-		m = next.(Model)
-	}
+	m = drain(t, m)
 	checkFrame(t, m, 110, 34)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
 	checkFrame(t, next.(Model), 60, 16)

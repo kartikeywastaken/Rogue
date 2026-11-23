@@ -1,7 +1,7 @@
 // Package engine is the seam between Rogue's TUI and the harness behind it.
 //
-// The TUI only knows about this interface. Swap the Mock for the real harness
-// (model client, tool runner, permissions, sessions) without touching the UI.
+// The TUI only knows about this interface. Provider clients, tools, policy, and
+// mission state live behind it without changing presentation.
 package engine
 
 import "context"

@@ -215,16 +215,29 @@ The existing Coordinator and OpGeneral concepts provide the architectural starti
 11. Analyst contributes to the final findings and report.
 12. ROGUE returns the mission report to the user.
 
-## 5. Development Priorities
+## 5. Four-Phase Implementation Plan
 
-| Priority | Development objective |
+| Phase | Development objective |
 |---|---|
-| P0 | Establish the core harness and single-agent execution |
-| P1 | Connect all eight operator instances |
-| P2 | Implement shared context and inter-agent communication |
-| P3 | Implement task dependencies and coordination |
-| P4 | Integrate evidence synchronization and centralized reporting |
-| P5 | Test and evaluate complete multi-agent mission workflows |
+| 1 | Reliable single-agent execution, real providers, scoped tools, truthful errors, and execution limits |
+| 2 | MissionControl, EvidenceVault, CommsChannel, persistence, and target intelligence |
+| 3 | Connect all eight operators through supervised task coordination; expand assessment tooling, approvals, OPSEC, analysis, and reporting |
+| 4 | CLI/API/MCP/SDK integration, benchmarks, extension interfaces, operational delivery, and explicitly specified advanced capabilities |
+
+See [ROADMAP.md](ROADMAP.md) for capability coverage, acceptance criteria, and
+implemented versus remaining work across this document and `paper.md`.
+
+The current runtime dispatches one Recon task per UI turn and connects it to
+mission-scoped task state, observations, evidence-backed findings, and comms.
+Mission state, observations, messages, target inventory, CVE references, and
+spending are now stored in authenticated encrypted checkpoints with recovery.
+Backend pause/resume/abort controls propagate to in-flight operations. Nmap and
+curl adapters and public NVD lookup extend the tool registry. Eight-operator
+coordination, automated candidate validation, OPSEC management, and remote
+interfaces remain future work. Model input is still isolated per UI turn; durable
+storage does not automatically provide cross-turn conversational memory.
+The existing terminal UI design is preserved. Production mock engines and
+simulated model choices are excluded; repeatable fixtures exist only in tests.
 
 ## 6. Architectural Principle
 

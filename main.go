@@ -1,53 +1,89 @@
-// Rogue — a terminal agent harness.
+// Rogue keeps its terminal interface separate from execution and storage.
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	"rogue/internal/arsenal"
 	"rogue/internal/engine"
 	"rogue/internal/llm"
 	"rogue/internal/tui"
 )
 
-// models is the default set offered to the user in the model picker.
-var models = []string{
-	"anthropic/claude-sonnet-4",
-	"anthropic/claude-haiku-4",
-	"google/gemini-2.5-flash",
-	"openai/gpt-4o",
-	"openai/gpt-4o-mini",
-	"deepseek/deepseek-chat-v3-0324",
-}
-
 func main() {
-	eng := buildEngine()
-	p := tea.NewProgram(tui.New(eng))
-	if _, err := p.Run(); err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "rogue:", err)
 		os.Exit(1)
 	}
 }
 
-func buildEngine() engine.Engine {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		// No API key — fall back to the mock so the TUI still works.
-		return engine.NewMock()
+func run() error {
+	checkProvider := flag.Bool("check-provider", false, "verify the configured model with a harmless echo tool (uses provider credits)")
+	listTools := flag.Bool("list-tools", false, "show installed tool availability without calling a model")
+	listMissions := flag.Bool("list-missions", false, "list saved missions without calling a model")
+	showMission := flag.String("show-mission", "", "show a saved mission's redacted report")
+	flag.Parse()
+	if flag.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %v", flag.Args())
 	}
-
-	provider := llm.NewOpenRouter(apiKey)
-
-	reg := arsenal.New()
-	arsenal.RegisterReconTools(reg)
-
-	defModel := os.Getenv("ROGUE_MODEL")
-	if defModel == "" {
-		defModel = models[0]
+	if *listTools {
+		return printJSON(newRegistry().Availability())
 	}
+	if *listMissions || *showMission != "" {
+		store, err := openStore()
+		if err != nil {
+			return err
+		}
+		if *listMissions {
+			missions, err := store.List()
+			if err != nil {
+				return err
+			}
+			return printJSON(missions)
+		}
+		harness := engine.NewHarnessWithOptions(nil, nil, nil, "", engine.Options{Store: store})
+		report, err := harness.Report(*showMission)
+		if err != nil {
+			return err
+		}
+		return printJSON(report)
+	}
+	if *checkProvider {
+		config, err := llm.LoadConfig(os.Getenv)
+		if err != nil {
+			return err
+		}
+		options, err := loadOptions()
+		if err != nil {
+			return err
+		}
+		budget, err := llm.NewBudget(llm.BudgetLimits{Tokens: options.MaxTokens, Dollars: options.CostLimit, InputPerMillion: options.InputPrice, OutputPerMillion: options.OutputPrice})
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		capabilities, err := llm.Probe(llm.WithBudget(ctx, budget), config.RawClient(), config.Model)
+		if err != nil {
+			return err
+		}
+		return printJSON(capabilities)
+	}
+	backend, err := buildEngine()
+	if err != nil {
+		return err
+	}
+	_, err = tea.NewProgram(tui.New(backend)).Run()
+	return err
+}
 
-	return engine.NewHarness(provider, reg, models, defModel)
+func printJSON(value any) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
 }

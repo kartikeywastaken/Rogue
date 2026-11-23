@@ -93,6 +93,7 @@ type Service struct {
 // Finding is a discovered vulnerability or observation.
 type Finding struct {
 	ID          string
+	MissionID   string
 	Title       string
 	Description string
 	Severity    Severity
@@ -109,10 +110,12 @@ type Finding struct {
 
 // Credential represents a discovered credential.
 type Credential struct {
-	ID       string
-	Type     string // password, hash, token, apikey, certificate
-	Username string
-	Value    string
-	Source   string
-	TargetID string
+	ID             string
+	MissionID      string
+	Type           string // password, hash, token, apikey, certificate
+	Username       string
+	Value          string `json:"-"`
+	SecretCaptured bool
+	Source         string
+	TargetID       string
 }

@@ -2,17 +2,18 @@ package arsenal
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"rogue/internal/domain"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
+	"syscall"
 )
 
 // RegisterReconTools adds the built-in reconnaissance tools to the registry.
@@ -49,6 +50,9 @@ func dnsLookupTool() *Tool {
 			if args.Host == "" {
 				return nil, fmt.Errorf("host is required")
 			}
+			if err := checkHost(ctx, args.Host); err != nil {
+				return nil, err
+			}
 			if args.RecordType == "" {
 				args.RecordType = "A"
 			}
@@ -58,7 +62,11 @@ func dnsLookupTool() *Tool {
 			switch strings.ToUpper(args.RecordType) {
 			case "A", "AAAA":
 				var ips []net.IP
-				ips, err = resolver.LookupIP(ctx, strings.ToLower(args.RecordType), args.Host)
+				network := "ip4"
+				if strings.EqualFold(args.RecordType, "AAAA") {
+					network = "ip6"
+				}
+				ips, err = resolver.LookupIP(ctx, network, args.Host)
 				for _, ip := range ips {
 					records = append(records, ip.String())
 				}
@@ -115,7 +123,7 @@ func portScanTool() *Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"host":  map[string]any{"type": "string", "description": "Target host or IP address"},
-				"ports": map[string]any{"type": "string", "description": "Comma-separated port numbers (e.g. \"80,443,8080\"). Defaults to top 25 common ports."},
+				"ports": map[string]any{"type": "string", "description": "Comma-separated port numbers (e.g. \"80,443,8080\"). Defaults to 26 common ports."},
 			},
 			"required": []string{"host"},
 		},
@@ -130,6 +138,9 @@ func portScanTool() *Tool {
 			if args.Host == "" {
 				return nil, fmt.Errorf("host is required")
 			}
+			if err := checkHost(ctx, args.Host); err != nil {
+				return nil, err
+			}
 
 			ports := defaultPorts
 			if args.Ports != "" {
@@ -137,51 +148,81 @@ func portScanTool() *Tool {
 				for _, s := range strings.Split(args.Ports, ",") {
 					s = strings.TrimSpace(s)
 					p, err := strconv.Atoi(s)
-					if err == nil && p > 0 && p <= 65535 {
+					if err != nil || p < 1 || p > 65535 {
+						return nil, fmt.Errorf("invalid port %q", s)
+					}
+					if !containsPort(ports, p) {
 						ports = append(ports, p)
 					}
 				}
 			}
 
 			type portResult struct {
-				Port int
-				Open bool
+				Port  int
+				State string
 			}
 			results := make([]portResult, len(ports))
 			var wg sync.WaitGroup
-			sem := make(chan struct{}, 32) // concurrency limit
-
-			for i, p := range ports {
-				wg.Add(1)
-				go func(idx, port int) {
-					defer wg.Done()
-					sem <- struct{}{}
-					defer func() { <-sem }()
-
-					addr := net.JoinHostPort(args.Host, strconv.Itoa(port))
-					conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-					if err == nil {
-						conn.Close()
-						results[idx] = portResult{Port: port, Open: true}
-					} else {
-						results[idx] = portResult{Port: port, Open: false}
+			// A fixed worker pool bounds goroutines as well as live sockets.
+			jobs := make(chan int)
+			for range min(32, len(ports)) {
+				wg.Go(func() {
+					for idx := range jobs {
+						if ctx.Err() != nil {
+							return
+						}
+						port := ports[idx]
+						addr := net.JoinHostPort(args.Host, strconv.Itoa(port))
+						conn, err := scopedDial(ctx, "tcp", addr)
+						if err == nil {
+							conn.Close()
+							results[idx] = portResult{Port: port, State: "open"}
+						} else {
+							state := "error"
+							var ne net.Error
+							if errors.As(err, &ne) && ne.Timeout() {
+								state = "timeout"
+							}
+							// A refusal is closed; resolution, policy, and routing errors are not.
+							if errors.Is(err, syscall.ECONNREFUSED) {
+								state = "closed"
+							}
+							results[idx] = portResult{Port: port, State: state}
+						}
 					}
-				}(i, p)
+				})
 			}
+		feed:
+			for i := range ports {
+				select {
+				case jobs <- i:
+				case <-ctx.Done():
+					break feed
+				}
+			}
+			close(jobs)
 			wg.Wait()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 
-			var open, closed []int
+			var open, closed, timedOut, failed []int
 			for _, r := range results {
-				if r.Open {
+				switch r.State {
+				case "open":
 					open = append(open, r.Port)
-				} else {
+				case "closed":
 					closed = append(closed, r.Port)
+				case "timeout":
+					timedOut = append(timedOut, r.Port)
+				default:
+					failed = append(failed, r.Port)
 				}
 			}
 			sort.Ints(open)
 			sort.Ints(closed)
 
-			summary := fmt.Sprintf("%s: %d open, %d closed", args.Host, len(open), len(closed))
+			summary := fmt.Sprintf("%s: %d open, %d closed, %d timed out, %d errors", args.Host, len(open), len(closed), len(timedOut), len(failed))
 			if len(open) > 0 {
 				ps := make([]string, len(open))
 				for i, p := range open {
@@ -190,8 +231,8 @@ func portScanTool() *Tool {
 				summary += " · open: " + strings.Join(ps, ", ")
 			}
 			return &Result{
-				Success: true,
-				Data:    map[string]any{"host": args.Host, "open_ports": open, "closed_ports": closed},
+				Success: len(failed) == 0 && len(timedOut) == 0,
+				Data:    map[string]any{"host": args.Host, "open_ports": open, "closed_ports": closed, "timed_out_ports": timedOut, "error_ports": failed},
 				Summary: summary,
 			}, nil
 		},
@@ -201,18 +242,6 @@ func portScanTool() *Tool {
 // ── http_request ─────────────────────────────────────────────────────────────
 
 func httpRequestTool() *Tool {
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
 	return &Tool{
 		Name:        "http_request",
 		Category:    "recon",
@@ -239,6 +268,11 @@ func httpRequestTool() *Tool {
 			if args.Method == "" {
 				args.Method = "GET"
 			}
+			if _, err := checkURL(ctx, args.URL); err != nil {
+				return nil, err
+			}
+			client := scopedHTTPClient()
+			defer client.CloseIdleConnections()
 
 			req, err := http.NewRequestWithContext(ctx, args.Method, args.URL, nil)
 			if err != nil {
@@ -252,7 +286,14 @@ func httpRequestTool() *Tool {
 			}
 			defer resp.Body.Close()
 
-			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
+			if err != nil {
+				return nil, fmt.Errorf("read response: %w", err)
+			}
+			truncated := len(bodyBytes) > 4096
+			if truncated {
+				bodyBytes = bodyBytes[:4096]
+			}
 			headers := make(map[string]string)
 			for k := range resp.Header {
 				headers[k] = resp.Header.Get(k)
@@ -267,6 +308,7 @@ func httpRequestTool() *Tool {
 					"status":      resp.Status,
 					"headers":     headers,
 					"body":        string(bodyBytes),
+					"truncated":   truncated,
 				},
 				Summary: summary,
 			}, nil
@@ -285,7 +327,6 @@ func headerAnalysisTool() *Tool {
 		{"Content-Security-Policy", "CSP — prevents XSS and injection"},
 		{"X-Content-Type-Options", "Prevents MIME sniffing"},
 		{"X-Frame-Options", "Clickjacking protection"},
-		{"X-XSS-Protection", "Legacy XSS filter"},
 		{"Referrer-Policy", "Controls referrer leakage"},
 		{"Permissions-Policy", "Controls browser features"},
 		{"Cross-Origin-Opener-Policy", "COOP — isolates browsing context"},
@@ -313,10 +354,11 @@ func headerAnalysisTool() *Tool {
 				return nil, fmt.Errorf("url is required")
 			}
 
-			client := &http.Client{
-				Timeout:   10 * time.Second,
-				Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			if _, err := checkURL(ctx, args.URL); err != nil {
+				return nil, err
 			}
+			client := scopedHTTPClient()
+			defer client.CloseIdleConnections()
 			req, err := http.NewRequestWithContext(ctx, "HEAD", args.URL, nil)
 			if err != nil {
 				return nil, err
@@ -334,6 +376,7 @@ func headerAnalysisTool() *Tool {
 				Note    string `json:"note"`
 			}
 			var findings []finding
+			var assessments []domain.Finding
 			present, missing := 0, 0
 			for _, h := range secHeaders {
 				v := resp.Header.Get(h.name)
@@ -343,16 +386,27 @@ func headerAnalysisTool() *Tool {
 				} else {
 					missing++
 					findings = append(findings, finding{Header: h.name, Present: false, Note: h.desc + " — MISSING"})
+					assessments = append(assessments, domain.Finding{Title: "Missing " + h.name, Description: "Header absent in HEAD response; relevance requires application-specific review.", Severity: domain.SevInfo, TargetID: args.URL, Phase: domain.PhaseRecon, Remediation: "Review whether this header applies to this service and configure it where appropriate."})
 				}
 			}
 
 			score := float64(present) / float64(present+missing) * 100
 			summary := fmt.Sprintf("%s: %.0f%% (%d/%d security headers present)", args.URL, score, present, present+missing)
 			return &Result{
-				Success: true,
-				Data:    map[string]any{"url": args.URL, "score_pct": score, "findings": findings},
-				Summary: summary,
+				Success:  true,
+				Data:     map[string]any{"url": args.URL, "score_pct": score, "findings": findings},
+				Summary:  summary,
+				Findings: assessments,
 			}, nil
 		},
 	}
+}
+
+func containsPort(ports []int, port int) bool {
+	for _, p := range ports {
+		if p == port {
+			return true
+		}
+	}
+	return false
 }

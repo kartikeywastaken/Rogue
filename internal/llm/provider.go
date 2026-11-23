@@ -42,8 +42,8 @@ type FuncCall struct {
 // ToolDef describes a tool the model can call. Parameters is a JSON Schema
 // object (map representation).
 type ToolDef struct {
-	Type     string      `json:"type"` // "function"
-	Function FuncDef     `json:"function"`
+	Type     string  `json:"type"` // "function"
+	Function FuncDef `json:"function"`
 }
 
 // FuncDef is a tool's function definition.
@@ -64,9 +64,11 @@ type Usage struct {
 // StreamDelta is one chunk from a streaming completion.
 type StreamDelta struct {
 	Content   string     // text fragment
-	ToolCalls []ToolCall // partial tool call deltas
+	ToolCalls []ToolCall // completed calls, emitted only after validated termination
 	Done      bool       // stream finished
 	Usage     Usage
+	Err       error // asynchronous transport/protocol failure; never followed by Done
+	Notice    string
 }
 
 // ── provider ─────────────────────────────────────────────────────────────────
