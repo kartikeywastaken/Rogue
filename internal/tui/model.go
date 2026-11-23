@@ -75,6 +75,8 @@ type Model struct {
 	histIdx int
 
 	jump bool // scroll to the tail on the next refresh
+
+	wmIdx int // wordmark style on the landing screen (tab cycles)
 }
 
 // eventMsg carries one engine event back onto the Elm loop. ch identifies the
@@ -241,6 +243,11 @@ func (m Model) onKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.push(entry{kind: entNotice, text: "interrupted"})
 		}
 		return m, nil
+	case "tab":
+		if m.phase == phaseLanding {
+			m.wmIdx = (m.wmIdx + 1) % len(wordmarks)
+			return m, nil
+		}
 	case "shift+tab":
 		m.mode = m.mode.Next()
 		m.notice("mode → " + m.mode.String())

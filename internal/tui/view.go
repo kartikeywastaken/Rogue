@@ -38,11 +38,8 @@ func (m Model) viewLanding() string {
 	if m.height >= 24 {
 		parts = append(parts, stPrompt.Render("◆"), "")
 	}
-	if m.width >= 30 && m.height >= 14 {
-		parts = append(parts, stLogo.Render(wordmark))
-	} else {
-		parts = append(parts, stLogo.Render("R O G U E"))
-	}
+	wm := renderWordmark(wordmarks[m.wmIdx].word, m.width, m.height)
+	parts = append(parts, lipgloss.NewStyle().Width(lipgloss.Width(wm)).Render(wm))
 	if m.height >= 18 {
 		parts = append(parts, "", stMuted.Render("an agent harness for your terminal"))
 	}
@@ -56,7 +53,7 @@ func (m Model) viewLanding() string {
 	if m.flash != "" {
 		parts = append(parts, stRed.Render(m.flash))
 	} else {
-		hint := "↵ send  ·  / commands  ·  shift+tab mode  ·  ^c quit"
+		hint := "tab next  ·  ↵ send  ·  / commands"
 		if lipgloss.Width(hint) > m.width-2 {
 			hint = "↵ send  ·  / cmds"
 		}

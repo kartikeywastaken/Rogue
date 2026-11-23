@@ -52,7 +52,3 @@ func modeColor(mode string) color.Color {
 		return colMuted
 	}
 }
-
-const wordmark = `█▀█ █▀█ █▀▀ █ █ █▀▀
-█▀▄ █ █ █ ▄ █ █ █▀▀
-▀ ▀ ▀▀▀ ▀▀▀ ▀▀▀ ▀▀▀`
