@@ -54,7 +54,7 @@ func TestDurableMissionAndInterruptedRecovery(t *testing.T) {
 		}
 		return modelReply(llm.StreamDelta{Content: "Fixture service observed.", Done: true}), nil
 	})
-	harness := NewHarnessWithOptions(provider, registry, []string{"fixture"}, "fixture", Options{Store: store, Rules: mission.Rules{Scope: []string{"127.0.0.1"}}})
+	harness := NewHarnessWithOptions(provider, registry, []string{"fixture"}, "fixture", Options{SingleOperator: true, Store: store, Rules: mission.Rules{Scope: []string{"127.0.0.1"}}})
 	for event := range harness.Run(context.Background(), Request{Prompt: "inspect fixture", Mode: ModeAuto}) {
 		if event.Kind == KindError {
 			t.Fatal(event.Err)
@@ -131,7 +131,7 @@ func TestPauseCancelsToolAndResumePreservesItsFailure(t *testing.T) {
 		}
 		return modelReply(llm.StreamDelta{Done: true, Content: "The operation was interrupted."}), nil
 	})
-	harness := NewHarness(provider, registry, []string{"fixture"}, "fixture")
+	harness := NewHarnessWithOptions(provider, registry, []string{"fixture"}, "fixture", Options{SingleOperator: true})
 	stream := harness.Run(context.Background(), Request{Prompt: "inspect fixture", Mode: ModeAuto})
 	<-started
 	id := harness.LastRun().Control.Snapshot().ID

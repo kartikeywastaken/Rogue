@@ -71,6 +71,7 @@ type ExternalOptions struct {
 	Runner   Runner
 	NmapPath string
 	CurlPath string
+	DigPath  string
 }
 
 func executable(name, configured string) (string, error) {
@@ -90,6 +91,7 @@ func RegisterExternalTools(registry *Registry, options ExternalOptions) {
 	}
 	registry.Register(nmapTool(options))
 	registry.Register(curlTool(options))
+	registry.Register(digTool(options))
 }
 
 func selectedPorts(raw string) (string, error) {
@@ -157,6 +159,11 @@ func nmapTool(options ExternalOptions) *Tool {
 			if err != nil {
 				return nil, err
 			}
+			for _, port := range strings.Split(ports, ",") {
+				if err := checkPort(ctx, port); err != nil {
+					return nil, err
+				}
+			}
 			address, err := scopedAddress(ctx, arguments.Host)
 			if err != nil {
 				return nil, err
@@ -198,10 +205,12 @@ func parseNmap(data []byte, address string) ([]target.Service, error) {
 						Value string `xml:"state,attr"`
 					} `xml:"state"`
 					Service struct {
-						Name    string   `xml:"name,attr"`
-						Product string   `xml:"product,attr"`
-						Version string   `xml:"version,attr"`
-						CPE     []string `xml:"cpe"`
+						Name       string   `xml:"name,attr"`
+						Product    string   `xml:"product,attr"`
+						Version    string   `xml:"version,attr"`
+						CPE        []string `xml:"cpe"`
+						Method     string   `xml:"method,attr"`
+						Confidence int      `xml:"conf,attr"`
 					} `xml:"service"`
 				} `xml:"port"`
 			} `xml:"ports"`
@@ -240,7 +249,7 @@ func parseNmap(data []byte, address string) ([]target.Service, error) {
 			if port.Number < 1 || port.Number > 65535 || port.Protocol != "tcp" {
 				return nil, errors.New("invalid service in Nmap output")
 			}
-			services = append(services, target.Service{Port: port.Number, Protocol: port.Protocol, Name: port.Service.Name, Product: port.Service.Product, Version: port.Service.Version, CPE: port.Service.CPE})
+			services = append(services, target.Service{Port: port.Number, Protocol: port.Protocol, Name: port.Service.Name, Product: port.Service.Product, Version: port.Service.Version, CPE: port.Service.CPE, Method: port.Service.Method, Confidence: port.Service.Confidence})
 		}
 	}
 	return services, nil

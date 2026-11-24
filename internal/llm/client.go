@@ -153,7 +153,18 @@ func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- Str
 			return
 		}
 		if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
-			fail(errors.New("provider reported an error during streaming"))
+			var detail struct {
+				Message, Type string
+			}
+			_ = json.Unmarshal(chunk.Error, &detail)
+			message := detail.Message
+			if c.APIKey != "" {
+				message = strings.ReplaceAll(message, c.APIKey, "[redacted]")
+			}
+			if len(message) > 512 {
+				message = message[:512] + "..."
+			}
+			fail(fmt.Errorf("%s stream error (%s): %s", c.Name, detail.Type, message))
 			return
 		}
 		for _, ch := range chunk.Choices {

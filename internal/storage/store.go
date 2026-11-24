@@ -22,6 +22,8 @@ import (
 	"rogue/internal/evidence"
 	"rogue/internal/llm"
 	"rogue/internal/mission"
+	"rogue/internal/operator"
+	"rogue/internal/opsec"
 	"rogue/internal/target"
 )
 
@@ -37,6 +39,8 @@ type Checkpoint struct {
 	Comms     comms.Snapshot
 	Targets   target.Snapshot
 	Spending  llm.Spending
+	Operators []operator.Agent
+	OPSEC     opsec.Snapshot
 }
 
 type Store struct {

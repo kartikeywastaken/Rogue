@@ -227,15 +227,29 @@ The existing Coordinator and OpGeneral concepts provide the architectural starti
 See [ROADMAP.md](ROADMAP.md) for capability coverage, acceptance criteria, and
 implemented versus remaining work across this document and `paper.md`.
 
-The current runtime dispatches one Recon task per UI turn and connects it to
-mission-scoped task state, observations, evidence-backed findings, and comms.
+The runtime now dispatches a bounded eight-role assessment graph per UI turn:
+Coordinator review -> Recon -> Scanner -> Coordinator supervision -> four
+specialists -> Analyst. OpGeneral installs a baseline dependency plan and inserts
+up to four evidence-driven service prerequisites. Coordinator proposals are
+validated by mission control; model prose cannot change rules. Approved loopback
+lab tools support bounded web probes, authentication/session checks, protected
+response collection and cleanup verification. No OS persistence or lateral
+movement is implied. Plan mode uses one tool-free reasoning
+pass. A backend single-Recon option retains the real baseline for comparison.
 Mission state, observations, messages, target inventory, CVE references, and
 spending are now stored in authenticated encrypted checkpoints with recovery.
 Backend pause/resume/abort controls propagate to in-flight operations. Nmap and
-curl adapters and public NVD lookup extend the tool registry. Eight-operator
-coordination, automated candidate validation, OPSEC management, and remote
-interfaces remain future work. Model input is still isolated per UI turn; durable
-storage does not automatically provide cross-turn conversational memory.
+curl adapters and public NVD lookup extend the tool registry. TLS, technology and
+cookie inspection, explicit DNS/path discovery and offline utilities supplement
+them. Exact-action approvals and explicit detection-signal pause gates are backend
+APIs with encrypted message audit. Reports export JSON or Markdown; `--assess`
+offers headless real execution. Each task receives ranked, size-bounded
+observations, structured findings, predecessor summaries marked unverified, and
+addressed comms from this mission. Indexed observation retrieval, explicit task
+proposals, operator burn/cancellation, observed access paths, reviewed CVSS/CVE/CWE
+metadata and rate-limit signal controls are connected. Cross-turn memory,
+arbitrary exploit-chain confirmation and the advanced paper research catalog
+remain unimplemented. Remote interfaces remain Phase 4.
 The existing terminal UI design is preserved. Production mock engines and
 simulated model choices are excluded; repeatable fixtures exist only in tests.
 

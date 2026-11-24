@@ -2,12 +2,14 @@ package arsenal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"time"
 
 	"rogue/internal/mission"
@@ -17,6 +19,8 @@ type Policy struct {
 	Mode       string
 	Rules      mission.Rules
 	Categories []string // nil means unrestricted; empty means no tools
+	Approve    func(string, json.RawMessage) error
+	Lab        bool
 }
 type policyKey struct{}
 
@@ -24,7 +28,7 @@ func WithPolicy(ctx context.Context, p Policy) context.Context {
 	return context.WithValue(ctx, policyKey{}, p)
 }
 
-func authorize(ctx context.Context, t *Tool) error {
+func authorize(ctx context.Context, t *Tool, args json.RawMessage) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -41,13 +45,38 @@ func authorize(ctx context.Context, t *Tool) error {
 	if p.Categories != nil && !slices.Contains(p.Categories, t.Category) {
 		return errors.New("tool not permitted for this operator")
 	}
-	if len(p.Rules.AllowedTools) > 0 && !slices.Contains(p.Rules.AllowedTools, t.Name) {
+	if t.LabOnly && !p.Lab {
+		return errors.New("tool requires explicit ROGUE_LAB=true")
+	}
+	if !t.Internal && len(p.Rules.AllowedTools) > 0 && !slices.Contains(p.Rules.AllowedTools, t.Name) {
 		return errors.New("tool excluded by mission rules")
 	}
-	if p.Mode == "default" && !slices.Contains(p.Rules.PreapprovedTools, t.Name) {
+	if t.LabOnly {
+		if p.Approve == nil {
+			return errors.New("exact-action approval required for lab operation")
+		}
+		return p.Approve(t.Name, args)
+	}
+	if !t.Internal && p.Mode == "default" && !slices.Contains(p.Rules.PreapprovedTools, t.Name) {
+		if p.Approve != nil {
+			return p.Approve(t.Name, args)
+		}
 		return errors.New("approval required: configure explicit preapproval or select auto mode within mission scope")
 	}
 	return nil
+}
+
+func labURL(ctx context.Context, raw string) (*url.URL, error) {
+	u, err := checkURL(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	policy, _ := ctx.Value(policyKey{}).(Policy)
+	ip := net.ParseIP(u.Hostname())
+	if !policy.Lab || ip == nil || !ip.IsLoopback() {
+		return nil, errors.New("lab operations require a literal loopback IP and explicit lab mode")
+	}
+	return u, nil
 }
 
 func checkHost(ctx context.Context, host string) error {
@@ -66,7 +95,26 @@ func checkURL(ctx context.Context, raw string) (*url.URL, error) {
 	if err := checkHost(ctx, u.Hostname()); err != nil {
 		return nil, err
 	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	if err := checkPort(ctx, port); err != nil {
+		return nil, err
+	}
 	return u, nil
+}
+
+func checkPort(ctx context.Context, raw string) error {
+	policy, ok := ctx.Value(policyKey{}).(Policy)
+	port, err := strconv.Atoi(raw)
+	if !ok || err != nil || !policy.Rules.AllowsPort(port) {
+		return fmt.Errorf("port %q is outside mission scope", raw)
+	}
+	return nil
 }
 
 // Resolve once, validate the peer, then dial a literal IP. Redirects are checked
@@ -77,6 +125,9 @@ func scopedDial(ctx context.Context, network, address string) (net.Conn, error) 
 		return nil, err
 	}
 	if err := checkHost(ctx, host); err != nil {
+		return nil, err
+	}
+	if err := checkPort(ctx, port); err != nil {
 		return nil, err
 	}
 	p := ctx.Value(policyKey{}).(Policy)

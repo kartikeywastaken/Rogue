@@ -92,20 +92,22 @@ type Service struct {
 
 // Finding is a discovered vulnerability or observation.
 type Finding struct {
-	ID          string
-	MissionID   string
-	Title       string
-	Description string
-	Severity    Severity
-	TargetID    string
-	OperatorID  string
-	Phase       KillChainPhase
-	Evidence    []string
-	Remediation string
-	CVSS        float64
-	CVE         []string
-	CWE         string
-	CreatedAt   time.Time
+	ID                   string
+	MissionID            string
+	Title                string
+	Description          string
+	Severity             Severity
+	TargetID             string
+	OperatorID           string
+	Phase                KillChainPhase
+	Evidence             []string
+	Remediation          string
+	CVSS                 float64
+	CVSSVector           string
+	ClassificationSource string
+	CVE                  []string
+	CWE                  string
+	CreatedAt            time.Time
 }
 
 // Credential represents a discovered credential.

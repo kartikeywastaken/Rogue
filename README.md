@@ -1,9 +1,11 @@
 # Rogue
 
 A Go security assessment harness with a Bubble Tea terminal interface. The current
-runtime executes one Recon operator through a real streaming model provider and
-four built-in network tools, installed Nmap/curl adapters, and public NVD CVE
-lookup. Every turn owns an isolated mission, task queue, evidence vault, target
+runtime connects eight roles through a dependency-aware assessment plan. Recon
+and Scanner execute tools; four downstream specialists review evidence and
+Analyst reports results. Registered capabilities include network checks,
+installed Nmap/curl adapters, offline utilities, and public NVD CVE lookup.
+Every turn owns an isolated mission, task queue, evidence vault, target
 inventory, communication channel, and encrypted checkpoint.
 
 The terminal layout, theme, wordmarks, and controls are preserved. There is no
@@ -65,10 +67,17 @@ allows model-only discussion but blocks all target network tools.
 | Setting | Meaning |
 |---|---|
 | `ROGUE_EXCLUDED` | Hosts, IPs, or CIDRs denied even when otherwise in scope |
+| `ROGUE_ALLOWED_PORTS` | Optional comma-separated TCP ports; empty keeps host-level scope |
 | `ROGUE_ALLOWED_TOOLS` | Optional tool-name allowlist; empty permits tools supported by the operator |
 | `ROGUE_PREAPPROVED_TOOLS` | Explicit prior authorization for named tools in default mode |
 | `ROGUE_TIMEOUT` | Mission deadline, default `3m` |
 | `ROGUE_MAX_ITERATIONS` | Model rounds, default `15` |
+| `ROGUE_CONCURRENCY` | Active operators, default `2`, range `1–8` |
+| `ROGUE_COOLDOWN` | Delay before reusing a worker, default `0s`, maximum `1m` |
+| `ROGUE_CONTEXT_BYTES` | Shared context JSON cap, default `24576`, range `4096–131072` |
+| `ROGUE_LAB` | Enable gated loopback lab tools; default `false` |
+| `ROGUE_OPSEC_PAUSE_AFTER` | Recorded signal count before pause; `0` disables |
+| `ROGUE_OPSEC_ABORT_AFTER` | Recorded signal count before abort; `0` disables |
 | `ROGUE_MAX_TOOL_CALLS` | Executions attempted, default `64` |
 | `ROGUE_MAX_TOKENS` | Per-mission token admission budget, default `50000` |
 | `ROGUE_MAX_OUTPUT_TOKENS` | Output cap sent with each model request, default `2048` |
@@ -191,7 +200,10 @@ checkpoint causes an explicit error instead of silently deleting evidence.
 ```sh
 ./rogue --list-missions
 ./rogue --show-mission MISSION_ID
+./rogue --show-mission MISSION_ID --report-format markdown
+./rogue --assess 'Assess the configured target' --assessment-mode default
 ./rogue --list-tools
+./rogue --capabilities
 ./rogue --check-provider
 ```
 
@@ -211,12 +223,12 @@ internal/evidence/          observation provenance, finding dedup, secret redact
 internal/comms/             mission-scoped message routing and history
 internal/target/            service inventory, conflicts, CVE reference catalog
 internal/storage/           authenticated encrypted checkpoints and recovery
-internal/operator/          eight role profiles (Recon currently dispatched)
+internal/operator/          profiles, cell capacity, lifecycle and health counts
 internal/domain/            shared assessment data types
 internal/tui/               existing presentation and turn lifecycle
 ```
 
-A useful reading path is `main.go` -> `engine/harness.go` -> `agent/loop.go` ->
+A useful reading path is `main.go` -> `engine/plan.go` -> `engine/cell.go` -> `agent/loop.go` ->
 `arsenal/arsenal.go` -> `arsenal/policy.go`, then the three shared services.
 The two critical boundaries are `Engine` (presentation versus execution) and
 `Provider` (agent behavior versus model transport).
@@ -236,6 +248,92 @@ Checks use process/HTTP boundary fixtures and do not call hosted models or scan
 external targets. Real loopback tests run where sockets are permitted and report
 an explicit skip under a restrictive sandbox. Core encrypted recovery, lifecycle,
 retry/budget, native protocol, parser, and adapter checks use no listening sockets.
+
+## Coordinated assessment
+
+OpGeneral installs a baseline plan: Coordinator reviews constraints, Recon discovers,
+Scanner checks observed services, Coordinator supervises, four specialists run
+within capacity, and Analyst consumes the handoffs. Nine baseline tasks cover eight roles sharing a
+provider and mission budget. Failed tasks block descendants and fail the mission;
+the saved report retains partial evidence. Access, post-access, exfiltration and
+persistence roles can use approved bounded lab tools; arbitrary post-access
+operations and persistence deployment are unsupported.
+
+After Recon, up to four observed services create targeted Scanner prerequisite
+tasks. These derive from successful inventory evidence and remain inside host and
+port scope. The main Scanner task waits for them, then consolidates their evidence
+without tool execution, preserving downstream handoffs without a second scan.
+Coordinator can use `propose_task` to insert evidence-backed prerequisites before
+Analyst. Mission control validates proposals; models cannot widen scope, grant
+approval or bypass role/tool/budget restrictions. `evidence_get` retrieves exact
+observations from this mission when bounded context omitted them.
+
+Task input includes up to 20 ranked observations with bounded excerpts, direct
+predecessor summaries labeled unverified, mission rules, and 12 recent addressed
+messages and structured findings. Direct handoffs, matching targets and cited
+evidence rank ahead of recency. The whole context envelope is size bounded;
+execution facts carry authoritative observation and per-tool counts independently
+of model-written summaries. Reports derive tool counts from the vault too;
+truncation and omitted observation counts are explicit. Originals remain in the
+encrypted vault. This
+is within-mission context, not automatic cross-turn memory. Only Analyst prose
+streams into the final answer; existing tool/status events show other workers.
+Budgets include the whole cell, retries and fallback. Eight tasks can need more
+time and tokens than Recon alone: configure `ROGUE_TIMEOUT` and `ROGUE_MAX_TOKENS`
+accordingly. Exhaustion fails explicitly. `engine.Options.SingleOperator` retains
+the real Recon baseline for embedding and comparisons.
+
+New tools: `ssl_scan` verifies one TLS handshake/certificate; `technology_detect`
+observes header hints and cookie flags without cookie values; `dir_bruteforce`
+checks up to 16 explicit same-origin paths without redirects; `subdomain_enum`
+resolves up to 32 labels, each separately scoped. `base64_decode` and `jwt_decode`
+inspect bounded local input (JWT signatures remain unverified). `hash_crack`
+compares up to 64 supplied SHA-256 candidates locally, returning a matching
+index rather than plaintext. These tools do not establish exploitability.
+
+Backend integrations can call `Harness.ApproveTool` with a mission ID, tool,
+exact JSON arguments and expiration within one hour. Grants are single-use;
+role, scope and allowlist checks still apply. Restart discards live grants;
+encrypted comms retains audit. Grant before a task starts so its tool definitions
+include the tool. There are no new terminal approval controls. `RecordDetection`
+records an explicit observer signal/IOC and pauses at the supplied count threshold
+(zero records only). Network errors are not automatically labeled detection.
+
+JSON/Markdown reports count inspectable evidence and separate model reviews from
+structured findings. CVSS v3.1 uses explicit vectors and FIRST's published base
+equations; reviewed classifications retain their reviewer. CVE correlations are
+candidates, not automatic applicability confirmation. Observed access paths use
+authenticated/unauthenticated response pairs; no exploit chain is inferred from
+co-located findings. OPSEC records explicit signals and HTTP 429 responses with
+optional pause/abort thresholds; workers support burn and cancellation. Advanced
+research organs and the large payload corpus remain unimplemented in ROADMAP.md.
+
+`--assess` executes the same real engine without opening the terminal UI. Status
+and tool summaries go to stderr; stdout contains the JSON or Markdown report.
+Failed assessments export partial evidence and exit nonzero. Ctrl-C cancels the
+mission through the same lifecycle controls. No mock backend is introduced.
+
+`--tool NAME --operator ROLE --arguments -` reads a single JSON argument object
+from stdin and executes the real tool without a model/API key. The explicit human
+command grants only that exact action; role, host/port scope and lab gates still
+apply. Its mission, results and any captured credentials use encrypted storage.
+Use stdin for sensitive inputs to avoid putting them in process arguments.
+
+Lab-only tools require `ROGUE_LAB=true`, a literal loopback IP, and an exact action
+grant: `xss_scan` observes harmless marker reflection; `sqli_scan` compares one
+syntax probe to a baseline; `password_spray` checks at most three supplied lab
+accounts; `session_check` verifies one endpoint using a supplied/captured session;
+`exposure_check` captures at most 64 KiB into the protected vault; `cleanup_verify`
+checks a supplied marker without claiming cleanup was performed. These are
+bounded assessment implementations, not general exploit/persistence engines.
+`secret_scan` detects 16 potential secret patterns without returning values;
+`cvss_score` scores a supplied v3.1 vector. WHOIS uses the fixed IANA endpoint;
+`dig_lookup` wraps installed dig with fixed argv and time limits.
+
+The normal 50000-token mission budget, provider selection and retry timing were
+not changed for Groq. Historical test evidence remains; temporary Groq overrides
+and test executables have been retired outside the project. CVSS reference:
+[FIRST v3.1 specification](https://www.first.org/cvss/v3.1/specification-document).
 
 ## Keys
 

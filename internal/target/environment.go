@@ -20,13 +20,15 @@ import (
 )
 
 type Service struct {
-	Port     int      `json:"port"`
-	Protocol string   `json:"protocol"`
-	Name     string   `json:"name"`
-	Product  string   `json:"product,omitempty"`
-	Version  string   `json:"version,omitempty"`
-	CPE      []string `json:"cpe,omitempty"`
-	Evidence []string `json:"evidence"`
+	Port       int      `json:"port"`
+	Protocol   string   `json:"protocol"`
+	Name       string   `json:"name"`
+	Product    string   `json:"product,omitempty"`
+	Version    string   `json:"version,omitempty"`
+	CPE        []string `json:"cpe,omitempty"`
+	Evidence   []string `json:"evidence"`
+	Method     string   `json:"method,omitempty"`
+	Confidence int      `json:"confidence,omitempty"`
 }
 
 type Conflict struct {
@@ -194,6 +196,10 @@ func (environment *Environment) Apply(observation evidence.Observation, findings
 			continue
 		}
 		saved := &host.Services[index]
+		if service.Method != "" && (saved.Method == "" || service.Method == "probed") {
+			saved.Method = service.Method
+			saved.Confidence = service.Confidence
+		}
 		saved.Evidence = addReference(saved.Evidence, observation.ID)
 		for _, field := range []struct {
 			name     string

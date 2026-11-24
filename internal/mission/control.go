@@ -141,6 +141,35 @@ func (c *Control) AddTaskInPhase(phase domain.KillChainPhase, title string, role
 	return c.addTask(phase, title, role, priority, deps...)
 }
 
+// AddPrerequisite inserts evidence-driven work before a task that has not
+// started. Dependencies must precede that task already; this preserves the
+// topological order used by recovery and makes cycles impossible.
+func (c *Control) AddPrerequisite(id, title string, role domain.Archetype, priority int, deps ...string) (Task, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	index := c.index(id)
+	if index < 0 || c.tasks[index].Status != Pending {
+		return Task{}, errors.New("mission: prerequisite destination must be pending")
+	}
+	for _, dependency := range deps {
+		position := c.index(dependency)
+		if position < 0 || position >= index {
+			return Task{}, errors.New("mission: prerequisite must depend on earlier work")
+		}
+	}
+	task, err := c.addTask(c.tasks[index].Phase, title, role, priority, deps...)
+	if err != nil {
+		return Task{}, err
+	}
+	// addTask appended a validated task. Move it before the destination, then
+	// make the destination wait for it. Existing task IDs never change.
+	copy(c.tasks[index+1:], c.tasks[index:len(c.tasks)-1])
+	c.tasks[index] = task
+	c.tasks[index+1].Dependencies = append(c.tasks[index+1].Dependencies, task.ID)
+	c.blockDependents()
+	return cloneTask(task), nil
+}
+
 func (c *Control) addTask(phase domain.KillChainPhase, title string, role domain.Archetype, priority int, deps ...string) (Task, error) {
 	if c.mission.Status != Planning && c.mission.Status != Active && c.mission.Status != Paused {
 		return Task{}, errors.New("mission: cannot add task after termination")

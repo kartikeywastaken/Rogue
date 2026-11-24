@@ -51,7 +51,7 @@ func TestRealHarnessWorkflow(t *testing.T) {
 	defer model.Close()
 	reg := arsenal.New()
 	arsenal.RegisterReconTools(reg)
-	h := NewHarnessWithOptions(&llm.Client{Name: "fixture", Endpoint: model.URL, Client: model.Client()}, reg, []string{"fixture"}, "fixture", Options{Rules: mission.Rules{Scope: []string{"127.0.0.1"}, PreapprovedTools: []string{"header_analysis"}}})
+	h := NewHarnessWithOptions(&llm.Client{Name: "fixture", Endpoint: model.URL, Client: model.Client()}, reg, []string{"fixture"}, "fixture", Options{SingleOperator: true, Rules: mission.Rules{Scope: []string{"127.0.0.1"}, PreapprovedTools: []string{"header_analysis"}}})
 	var events []Event
 	for e := range h.Run(context.Background(), Request{Prompt: "Review headers on the local fixture", Mode: ModeDefault}) {
 		events = append(events, e)

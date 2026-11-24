@@ -415,3 +415,43 @@ The prior lesson's cross-turn limitation still holds: persisted observations do
 not automatically become input to the next model request. Multi-operator context
 sharing and coordination remain Phase 3 work. Live model acceptance remains
 unverified in this environment because no keys or model are configured.
+
+## Session 2 — commit history + pending eight-role change (2026-11-24)
+
+- Goal: bounded debrief of commits 92a046d (tui), d5b0649 (font/docs),
+  4ea935e (initial setup), f6ac1a2 (phasec3), and the uncommitted eight-role
+  dependency workflow. Focus: architecture and guardrails (scope enforcement,
+  exact-action approvals, shared budgets, evidence provenance, pause/abort).
+- Scope limit: explain and quiz only; no source edits; no work that extends
+  offensive capability.
+- Budget (per learner preference for a clear endpoint): 5 stages, one
+  question each, plus one optional integrated scenario. Then close.
+- Snapshot: HEAD f6ac1a2 plus working tree. SHA256 over sorted modified and
+  untracked .go files: 09e6ffdd…4ab026. The tree was still changing during the
+  session (cell_test.go, report.go, store.go and main.go changed after the
+  first read). Re-check source before grading any stage it affects.
+
+### Stage map
+
+- [ ] S1. Single-call guardrail pipeline: Registry.Exec order
+  (Available → validateArgs → authorize → Execute), and why the pending change
+  moved validation ahead of authorization. Sources: internal/arsenal/arsenal.go:97–114,
+  internal/arsenal/policy.go:29–56.
+- [ ] S2. Exact-action approvals: actionKey canonicalization, single use, a
+  maximum one-hour expiry, deliberate loss on restart, audit through comms.
+  Sources: internal/engine/approval.go:20–97.
+- [ ] S3. Scope at the network layer: scopedDial resolves, then validates each
+  IP, then dials the literal IP. Also redirect re-checks and DNS rebinding.
+  Source: internal/arsenal/policy.go:79–122.
+- [ ] S4. Fixed dependency plan and dispatch: AssessmentPlan graph, Claim,
+  blockDependents, and tool-less review roles. Sources: internal/engine/plan.go,
+  internal/engine/cell.go dispatch/executeTask, internal/mission/control.go Claim/blockDependents.
+- [ ] S5. Shared budget and untrusted context: mission-wide toolCalls in
+  BeforeTool versus per-loop limits; taskContext labels predecessor summaries
+  as unverified. Source: internal/engine/cell.go BeforeTool and taskContext.
+- [ ] Optional integrated scenario.
+
+### Attempts
+
+#### S1-Q1 — baseline (pending)
+- Question: see chat. Asked 2026-11-24. Awaiting learner.

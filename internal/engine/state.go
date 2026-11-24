@@ -13,6 +13,7 @@ import (
 	"rogue/internal/llm"
 	"rogue/internal/mission"
 	"rogue/internal/operator"
+	"rogue/internal/opsec"
 	"rogue/internal/storage"
 	"rogue/internal/target"
 )
@@ -21,13 +22,19 @@ import (
 // that must appear together in a durable checkpoint, such as a finding and its
 // supporting tool observation.
 type RunState struct {
-	Control  *mission.Control
-	Evidence *evidence.Vault
-	Comms    *comms.Channel
-	Targets  *target.Environment
-	Budget   *llm.Budget
-	mu       sync.Mutex
-	store    *storage.Store
+	Control    *mission.Control
+	Evidence   *evidence.Vault
+	Comms      *comms.Channel
+	Targets    *target.Environment
+	Budget     *llm.Budget
+	Cell       *operator.Cell
+	OPSEC      *opsec.Control
+	toolCalls  int
+	approvals  map[string]Approval
+	detections int
+	usage      Usage
+	mu         sync.Mutex
+	store      *storage.Store
 }
 
 func (state *RunState) save() error {
@@ -37,6 +44,12 @@ func (state *RunState) save() error {
 	checkpoint := storage.Checkpoint{
 		Mission: state.Control.Snapshot(), Evidence: state.Evidence.PrivateSnapshot(),
 		Comms: state.Comms.Snapshot(), Targets: state.Targets.Snapshot(), Spending: state.Budget.Snapshot(),
+	}
+	if state.Cell != nil {
+		checkpoint.Operators = state.Cell.Snapshot()
+	}
+	if state.OPSEC != nil {
+		checkpoint.OPSEC = state.OPSEC.Snapshot()
 	}
 	return state.store.Save(checkpoint)
 }
@@ -98,6 +111,28 @@ func (state *RunState) recordResult(task mission.Task, profile operator.Profile,
 	if err := state.publish(profile.Callsign, "tool.observed", execution.Result.Summary, observation.ID); err != nil {
 		return err
 	}
+	if execution.Result.Success && len(execution.Result.Credentials) > 0 {
+		var ids []string
+		for _, credential := range execution.Result.Credentials {
+			credential.MissionID = task.MissionID
+			credential.TargetID = observation.Target
+			credential.Source = observation.ID
+			saved, err := state.Evidence.AddCredential(credential)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, saved.ID)
+			if err = state.publish(profile.Callsign, "credential.captured", saved.ID, observation.ID); err != nil {
+				return err
+			}
+		}
+		data, ok := execution.Result.Data.(map[string]any)
+		if !ok {
+			data = map[string]any{"result": execution.Result.Data}
+		}
+		data["credential_ids"] = ids
+		execution.Result.Data = data
+	}
 	var findings []domain.Finding
 	if execution.Result.Success {
 		for _, finding := range execution.Result.Findings {
@@ -116,6 +151,9 @@ func (state *RunState) recordResult(task mission.Task, profile operator.Profile,
 		}
 	}
 	if err := state.Targets.Apply(observation, findings); err != nil {
+		return err
+	}
+	if err := state.observeSignals(observation); err != nil {
 		return err
 	}
 	return state.save()
@@ -166,18 +204,32 @@ func (harness *Harness) changeMission(id, action, reason string) error {
 // Reports expose redacted credentials and observation metadata. Detailed raw
 // traces remain inside the encrypted checkpoint instead of appearing by default.
 type Report struct {
-	Mission  mission.Mission
-	Evidence evidence.PublicSnapshot
-	Targets  target.Snapshot
-	Spending llm.Spending
-	Messages []comms.Message
+	OPSEC     opsec.Snapshot
+	Operators []operator.Agent
+	Analysis  Analysis
+	Mission   mission.Mission
+	Evidence  evidence.PublicSnapshot
+	Targets   target.Snapshot
+	Spending  llm.Spending
+	Messages  []comms.Message
 }
 
-func (harness *Harness) Report(id string) (Report, error) {
+func (harness *Harness) Report(id string) (report Report, failure error) {
+	var observations []evidence.Observation
+	defer func() {
+		if failure == nil {
+			// Derive access paths from the protected trace, then return only the
+			// redacted report. Public observation payloads intentionally stay nil.
+			input := report
+			input.Evidence.Observations = observations
+			report.Analysis = Analyze(input)
+		}
+	}()
 	if state, err := harness.activeRun(id); err == nil {
 		state.mu.Lock()
 		defer state.mu.Unlock()
-		return Report{Mission: state.Control.Snapshot(), Evidence: state.Evidence.PublicSnapshot(), Targets: state.Targets.Snapshot(), Spending: state.Budget.Snapshot(), Messages: publicMessages(state.Comms.History(""))}, nil
+		observations = state.Evidence.Observations()
+		return Report{OPSEC: state.OPSEC.Snapshot(), Operators: state.Cell.Snapshot(), Mission: state.Control.Snapshot(), Evidence: state.Evidence.PublicSnapshot(), Targets: state.Targets.Snapshot(), Spending: state.Budget.Snapshot(), Messages: publicMessages(state.Comms.History(""))}, nil
 	}
 	if harness.opts.Store == nil {
 		return Report{}, errors.New("durable storage is not configured")
@@ -190,7 +242,8 @@ func (harness *Harness) Report(id string) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	return Report{Mission: checkpoint.Mission, Evidence: vault.PublicSnapshot(), Targets: checkpoint.Targets, Spending: checkpoint.Spending, Messages: publicMessages(checkpoint.Comms.History)}, nil
+	observations = vault.Observations()
+	return Report{OPSEC: checkpoint.OPSEC, Operators: checkpoint.Operators, Mission: checkpoint.Mission, Evidence: vault.PublicSnapshot(), Targets: checkpoint.Targets, Spending: checkpoint.Spending, Messages: publicMessages(checkpoint.Comms.History)}, nil
 }
 
 func publicMessages(messages []comms.Message) []comms.Message {

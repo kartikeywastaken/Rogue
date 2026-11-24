@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"rogue/internal/analysis"
 	"rogue/internal/domain"
 )
 
@@ -32,9 +33,10 @@ type Vault struct {
 	observations []Observation
 	findings     []domain.Finding
 	credentials  []domain.Credential
+	index        map[string]int
 }
 
-func New(missionID string) *Vault { return &Vault{missionID: missionID} }
+func New(missionID string) *Vault { return &Vault{missionID: missionID, index: make(map[string]int)} }
 func cloneObservation(o Observation) Observation {
 	o.Input = slices.Clone(o.Input)
 	o.Output = slices.Clone(o.Output)
@@ -66,7 +68,31 @@ func (v *Vault) Record(o Observation) (Observation, error) {
 		o.StartedAt = time.Now().UTC()
 	}
 	v.observations = append(v.observations, cloneObservation(o))
+	v.index[o.ID] = len(v.observations) - 1
 	return cloneObservation(o), nil
+}
+
+func (v *Vault) Observation(id string) (Observation, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	index, found := v.index[id]
+	if !found {
+		return Observation{}, errors.New("observation not found in this mission")
+	}
+	return cloneObservation(v.observations[index]), nil
+}
+
+// CredentialSecret is only for an explicitly approved tool. Reports continue to
+// use Credentials(), which never exposes secret values.
+func (v *Vault) CredentialSecret(id string) (domain.Credential, error) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, credential := range v.credentials {
+		if credential.ID == id {
+			return credential, nil
+		}
+	}
+	return domain.Credential{}, errors.New("credential not found in this mission")
 }
 
 func (v *Vault) AddFinding(f domain.Finding) (domain.Finding, error) {
@@ -82,6 +108,15 @@ func (v *Vault) AddFinding(f domain.Finding) (domain.Finding, error) {
 	}
 	if math.IsNaN(f.CVSS) || math.IsInf(f.CVSS, 0) || f.CVSS < 0 || f.CVSS > 10 {
 		return domain.Finding{}, errors.New("evidence: CVSS outside 0..10")
+	}
+	if f.CVSSVector != "" {
+		score, err := analysis.BaseScore(f.CVSSVector)
+		if err != nil {
+			return domain.Finding{}, err
+		}
+		if score != f.CVSS {
+			return domain.Finding{}, errors.New("CVSS score does not match its vector")
+		}
 	}
 	ownerObserved := false
 	for _, id := range f.Evidence {

@@ -36,8 +36,9 @@ results, bounded execution, and observable failure.
   token/spend reservations across attempts. Interrupted streams do not replay tools.
 
 **Implementation status:** the Phase 1 implementation is complete. Live-provider
-acceptance remains environment-dependent: no keys or model were configured during
-this implementation, so that checkbox remains open. `--check-provider` provides
+acceptance remains environment-dependent: the initial implementation had no
+configured credentials. Later pair-specific validation is recorded in Phase 3;
+general provider compatibility remains open. `--check-provider` provides
 the controlled probe; local fixtures are not represented as hosted validation.
 
 **Acceptance:** scoped reconnaissance returns real observations; denied calls have
@@ -75,8 +76,8 @@ are connected to the execution path, ready for multiple operators.
 
 **Implementation status:** Phase 2 is implemented and locally validated through
 mission completion, persisted reload, crash recovery/ownership checks, and
-pause/resume. Cross-turn model context and multi-operator scheduling remain
-Phase 3 work; a saved report does not implicitly become model input.
+pause/resume. Multi-operator scheduling is described in Phase 3. Cross-turn model
+context remains unimplemented; a saved report does not implicitly become input.
 
 **Acceptance:** independent tasks can be claimed without double assignment;
 failed dependencies block downstream work; unrelated missions cannot share state;
@@ -88,33 +89,85 @@ inspectable provenance. A successful tool call alone does not verify an exploit.
 **Outcome:** all eight roles participate in a supervised mission with useful,
 measurable handoffs and actual capabilities appropriate to each role.
 
-- [ ] OperatorAgent/OperatorCell identities, capability sets, lifecycle, health,
+- [x] OperatorAgent/OperatorCell identities, capability sets, lifecycle, health,
   bounded concurrency, cooldown, and cancellation.
-- [ ] OpGeneral planning plus Coordinator supervision: validate proposed plans,
+- [x] OpGeneral planning plus Coordinator supervision: validate proposed plans,
   dependencies, scope, budgets, and capabilities before dispatch.
-- [ ] First integrated workflow: Recon discovers -> Scanner checks discovered
+- [x] First integrated workflow: Recon discovers -> Scanner checks discovered
   services -> Analyst reports evidence, with explicit failure/blocked handling.
-- [ ] Extend supported tasks to Exploiter, Infiltrator, Exfiltrator, and Ghost through
+- [x] Extend supported tasks to Exploiter, Infiltrator, Exfiltrator, and Ghost through
   controlled assessment/lab workflows, with explicit approval boundaries and real
   evidence. Report unsupported tasks as unsupported, never as completed actions.
-- [ ] Shared context retrieval and relevant comms delivery into operator inputs;
+- [x] Shared context retrieval and relevant comms delivery into operator inputs;
   follow-up tasks from evidence; duplicate/conflict handling and mission progress.
-- [ ] Implement the paper's remaining built-ins: subdomain enumeration, WHOIS,
+- [x] Implement bounded assessment variants of the paper's built-ins: subdomain enumeration, WHOIS,
   content discovery, technology identification, TLS checks, web vulnerability
   assessment, authentication assessment, hash analysis, Base64 and JWT utilities.
 - [x] Bring forward the initial Nmap and curl adapters, typed inputs, executable
   availability checks, pinned target IPs, cancellation, bounded output, and raw
   Nmap XML evidence; NVD ID/keyword lookup with caching and pacing.
-- [ ] Expand the external tool catalog and connect service discovery/CPEs to
+- [x] Expand the supported external tool catalog and connect service discovery/CPEs to
   candidate validation workflows. The initial adapters do not complete all tooling.
-- [ ] ApprovalController with decisions bound to exact action/target/mission,
+- [x] ApprovalController with decisions bound to exact action/target/mission,
   expiration, and audit; OPSEC detection tracking, thresholds, IOC records,
   pause/abort propagation, and operator cooldown/burn state.
-- [ ] AnalysisEngine: evidence-linked severity/CVSS/CVE/CWE metadata, attack-path
+- [x] AnalysisEngine: evidence-linked severity/CVSS/CVE/CWE metadata, observed access-path
   reasoning, remediation, executive/technical reports, Markdown and JSON exports.
-- [ ] The paper's research tool catalogs, payload/reference datasets, secret-pattern
-  detection, and advanced assessment modules, each with lab tests and an honest
-  capability status. Catalog entries and simulators do not count as executed work.
+- [x] Sixteen-pattern secret detection with redacted fingerprints and offsets.
+- [ ] Remaining research organs and large payload/reference datasets from paper §6.
+  No fake implementations or simulated execution are registered for these modules.
+
+**Operational implementation:** a nine-task baseline covers eight roles, including
+Coordinator planning and a second supervision step after Scanner. The supervisor
+can propose evidence-backed prerequisites through `propose_task`; mission control
+validates role, scope, dependencies, tool availability and budget before accepting.
+Indexed `evidence_get` retrieves omitted observations without cross-mission access.
+Observed services add up to four bounded Scanner tasks; their parent consolidates
+without repeating network work. Workers transition through tasked, executing,
+cooldown and burned states with cancellation and recorded failure-risk heuristics.
+
+TLS, technology/cookie inspection, explicit path/DNS discovery and local utilities
+are implemented. Exact-action expiring single-use backend approvals and explicit
+detection/IOC logging with threshold pause have encrypted audit. Markdown/JSON
+reports count evidence and retain uncertainty without invented CVSS scores.
+
+Observed services now create up to four scoped Scanner prerequisites before the
+main Scanner task. Context retrieval ranks ancestry, explicit citations, matching
+targets and finding references before recency, with a configurable total JSON
+size cap. `--assess` provides real headless acceptance runs and exports partial
+reports on failure. Optional allowed ports constrain both native and external
+network operations. These features are shared across providers.
+
+**Live acceptance (2026-11-24):** a real local Juice Shop v20.4.0 release and
+Groq `qwen/qwen3.8-27b` completed mission `854d11e7053f817c`: 9 tasks across
+8 roles, 3 successful tool observations (Nmap, headers, technology), and 6
+informational evidence-linked header findings. No mocks or simulated tool
+responses were used. The encrypted mission reloaded and exported successfully.
+Temporary Groq overrides and the longer-wait test binary have been archived
+outside the project; normal provider/token defaults and source retry timing are unchanged.
+This is scoped handoff validation, not comprehensive vulnerability coverage or
+validation of every provider/model. Earlier provider/quota failures are retained.
+
+**Provider-independent lab validation:** real Juice Shop checks completed for a
+paired SQL-error probe (CWE-209 disclosure, not confirmed injection), reflection
+probe, disposable-account authentication with encrypted credential capture,
+session verification against an unauthenticated-denied endpoint, bounded response
+collection and cleanup-marker verification. CVSS v3.1 calculation returned 9.8 for
+the standard network/low-complexity/no-privilege/high-impact vector. No model API
+was used for these checks. Role, port and lab-mode denials were checked separately.
+
+Reports derive observed access paths from private evidence before redaction,
+preserving raw-data confidentiality. CVE description correlations remain review
+candidates; CVSS/CVE/CWE classification requires an explicit named review. Dig
+joins the existing external adapters. Rate-limit signals can pause/abort through
+configured OPSEC thresholds; generic failures are not described as detection.
+
+**Remaining scope:** the paper's advanced research organs, large payload corpus,
+arbitrary OS privilege escalation/persistence, unrestricted scanner wrappers and
+automatic confirmation of arbitrary CVEs are not implemented. The operational
+assessment backend is delivered; the full original Phase 3 research catalog is
+not complete. This status is explicit rather than replacing missing modules with
+mocks or claiming that a narrow lab probe proves a whole exploit chain.
 
 **Acceptance:** demonstrate multi-operator dependency handoffs against controlled
 fixtures, measure completed/failed/blocked tasks and evidence quality, exercise

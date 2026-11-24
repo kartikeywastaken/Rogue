@@ -17,20 +17,28 @@ import (
 	"rogue/internal/llm"
 	"rogue/internal/mission"
 	"rogue/internal/operator"
+	"rogue/internal/opsec"
 	"rogue/internal/storage"
 	"rogue/internal/target"
 )
 
 type Options struct {
-	Rules         mission.Rules
-	Timeout       time.Duration
-	MaxIterations int
-	MaxToolCalls  int
-	MaxTokens     int
-	CostLimit     float64
-	InputPrice    float64
-	OutputPrice   float64
-	Store         *storage.Store
+	// SingleOperator retains a measurable Recon baseline for comparison runs.
+	SingleOperator bool
+	Concurrency    int
+	Cooldown       time.Duration
+	ContextBytes   int
+	Rules          mission.Rules
+	Timeout        time.Duration
+	MaxIterations  int
+	MaxToolCalls   int
+	MaxTokens      int
+	CostLimit      float64
+	InputPrice     float64
+	OutputPrice    float64
+	Store          *storage.Store
+	OPSEC          opsec.Policy
+	Lab            bool
 }
 
 type Harness struct {
@@ -61,10 +69,26 @@ func NewHarnessWithOptions(provider llm.Provider, registry *arsenal.Registry, mo
 	if options.MaxTokens <= 0 {
 		options.MaxTokens = 50000
 	}
+	if options.Concurrency < 1 {
+		options.Concurrency = 2
+	}
+	if options.ContextBytes < 4096 {
+		options.ContextBytes = 24 * 1024
+	}
+	if options.ContextBytes > 128*1024 {
+		options.ContextBytes = 128 * 1024
+	}
+	if options.Concurrency > 8 {
+		options.Concurrency = 8
+	}
+	if options.Cooldown < 0 {
+		options.Cooldown = 0
+	}
 	options.Rules.Scope = slices.Clone(options.Rules.Scope)
 	options.Rules.Excluded = slices.Clone(options.Rules.Excluded)
 	options.Rules.AllowedTools = slices.Clone(options.Rules.AllowedTools)
 	options.Rules.PreapprovedTools = slices.Clone(options.Rules.PreapprovedTools)
+	options.Rules.AllowedPorts = slices.Clone(options.Rules.AllowedPorts)
 	return &Harness{provider: provider, reg: registry, models: slices.Clone(models), defModel: model, opts: options, runs: make(map[string]*RunState)}
 }
 
@@ -85,10 +109,13 @@ func (harness *Harness) prepare(request Request) (*RunState, func(), error) {
 	if request.Mode < ModeDefault || request.Mode > ModePlan {
 		return nil, nil, errors.New("invalid execution mode")
 	}
-	if harness.provider == nil || harness.reg == nil {
-		return nil, nil, errors.New("provider and tool registry required")
+	if harness.reg == nil {
+		return nil, nil, errors.New("tool registry required")
 	}
 	id := domain.ID()
+	if harness.opts.OPSEC.PauseAfter < 0 || harness.opts.OPSEC.AbortAfter < 0 {
+		return nil, nil, errors.New("OPSEC thresholds must be nonnegative")
+	}
 	control, err := mission.New(id, request.Prompt, harness.opts.Rules)
 	if err != nil {
 		return nil, nil, err
@@ -104,7 +131,8 @@ func (harness *Harness) prepare(request Request) (*RunState, func(), error) {
 			return nil, nil, err
 		}
 	}
-	state := &RunState{Control: control, Evidence: evidence.New(id), Comms: comms.New(id, "control"), Targets: target.New(id), Budget: budget, store: harness.opts.Store}
+	state := &RunState{Control: control, Evidence: evidence.New(id), Comms: comms.New(id, "control"), Targets: target.New(id), Budget: budget, Cell: operator.NewCell(harness.opts.Concurrency, harness.opts.Cooldown), store: harness.opts.Store}
+	state.OPSEC = opsec.New(harness.opts.OPSEC)
 	harness.mu.Lock()
 	harness.last = state
 	harness.runs[id] = state
@@ -120,7 +148,7 @@ func (harness *Harness) prepare(request Request) (*RunState, func(), error) {
 	return state, cleanup, nil
 }
 
-func (harness *Harness) run(parent context.Context, request Request, output chan<- Event) {
+func (harness *Harness) runSingle(parent context.Context, request Request, output chan<- Event) {
 	defer close(output)
 	ctx, cancel := context.WithTimeout(parent, harness.opts.Timeout)
 	defer cancel()

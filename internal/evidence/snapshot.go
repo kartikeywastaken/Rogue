@@ -50,7 +50,9 @@ func Restore(snapshot Snapshot) (*Vault, error) {
 		if _, err := vault.Record(observation); err != nil {
 			return nil, err
 		}
+		delete(vault.index, vault.observations[len(vault.observations)-1].ID)
 		vault.observations[len(vault.observations)-1].ID = originalID
+		vault.index[originalID] = len(vault.observations) - 1
 		ids[originalID] = true
 		calls[observation.TaskID+"/"+observation.ToolCallID] = true
 	}

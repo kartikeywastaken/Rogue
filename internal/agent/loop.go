@@ -52,6 +52,7 @@ type Config struct {
 	BeforeTool     func(context.Context, llm.ToolCall) error
 	OnStart        func(llm.ToolCall) error
 	OnTool         func(Execution) error
+	Lab            bool
 }
 
 type Execution struct {
@@ -175,6 +176,19 @@ func (loop *Loop) execute(ctx context.Context, config Config, call llm.ToolCall,
 	}
 	defer finish()
 	input := call.Function.Arguments
+	if tool := loop.arsenal.Get(call.Function.Name); tool != nil && len(tool.SensitiveArgs) > 0 {
+		var values map[string]any
+		if json.Unmarshal([]byte(input), &values) == nil {
+			for _, name := range tool.SensitiveArgs {
+				if _, found := values[name]; found {
+					values[name] = "[redacted]"
+				}
+			}
+			if data, err := json.Marshal(values); err == nil {
+				input = string(data)
+			}
+		}
+	}
 	if len(input) > 120 {
 		input = input[:120] + "…"
 	}
@@ -206,14 +220,14 @@ func (loop *Loop) execute(ctx context.Context, config Config, call llm.ToolCall,
 	if !result.Success && result.Error == "" {
 		result.Error = result.Summary
 	}
-	data, err := json.Marshal(result)
-	if err != nil {
-		return llm.Message{}, fmt.Errorf("encode tool result: %w", err)
-	}
 	if config.OnTool != nil {
 		if err := config.OnTool(Execution{Call: call, Result: result, StartedAt: started}); err != nil {
 			return llm.Message{}, fmt.Errorf("record tool evidence: %w", err)
 		}
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return llm.Message{}, fmt.Errorf("encode tool result: %w", err)
 	}
 	info.OK = result.Success
 	info.Output = result.Summary
@@ -256,7 +270,13 @@ func (loop *Loop) run(parent context.Context, config Config, task string, output
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: config.SystemPrompt}, {Role: llm.RoleUser, Content: task}}
 	tools := loop.arsenal.ToolDefsFor(config.ToolCategories)
 	if config.AllowedTools != nil {
-		tools = slices.DeleteFunc(tools, func(tool llm.ToolDef) bool { return !slices.Contains(config.AllowedTools, tool.Function.Name) })
+		tools = slices.DeleteFunc(tools, func(tool llm.ToolDef) bool {
+			metadata := loop.arsenal.Get(tool.Function.Name)
+			return !metadata.Internal && !slices.Contains(config.AllowedTools, tool.Function.Name)
+		})
+	}
+	if !config.Lab {
+		tools = slices.DeleteFunc(tools, func(tool llm.ToolDef) bool { return loop.arsenal.Get(tool.Function.Name).LabOnly })
 	}
 	totals := TokenUsage{}
 	usedTools := 0

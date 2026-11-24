@@ -19,24 +19,28 @@ import (
 
 // Tool is a single executable capability.
 type Tool struct {
-	Name        string
-	Category    string // recon, web, vuln, auth, util
-	Description string
-	Parameters  map[string]any // JSON Schema for the LLM
-	Execute     func(ctx context.Context, args json.RawMessage) (*Result, error)
-	Available   func() error
+	Name          string
+	Category      string // recon, web, vuln, auth, util
+	Description   string
+	Parameters    map[string]any // JSON Schema for the LLM
+	Execute       func(ctx context.Context, args json.RawMessage) (*Result, error)
+	Available     func() error
+	LabOnly       bool
+	Internal      bool
+	SensitiveArgs []string
 }
 
 // Result is the output of a tool execution.
 type Result struct {
-	Success      bool             `json:"success"`
-	Data         any              `json:"data,omitempty"`
-	Summary      string           `json:"summary"`
-	Error        string           `json:"error,omitempty"`
-	Findings     []domain.Finding `json:"-"` // proposals; the vault attaches real observations
-	Artifact     []byte           `json:"-"` // original output for the protected vault, not model context
-	ArtifactType string           `json:"-"`
-	Dur          time.Duration    `json:"duration_ns"`
+	Success      bool                `json:"success"`
+	Data         any                 `json:"data,omitempty"`
+	Summary      string              `json:"summary"`
+	Error        string              `json:"error,omitempty"`
+	Findings     []domain.Finding    `json:"-"` // proposals; the vault attaches real observations
+	Artifact     []byte              `json:"-"` // original output for the protected vault, not model context
+	ArtifactType string              `json:"-"`
+	Dur          time.Duration       `json:"duration_ns"`
+	Credentials  []domain.Credential `json:"-"`
 }
 
 // ── registry ─────────────────────────────────────────────────────────────────
@@ -104,10 +108,10 @@ func (r *Registry) Exec(ctx context.Context, name string, args json.RawMessage) 
 			return nil, err
 		}
 	}
-	if err := authorize(ctx, t); err != nil {
+	if err := validateArgs(args, t.Parameters); err != nil {
 		return nil, err
 	}
-	if err := validateArgs(args, t.Parameters); err != nil {
+	if err := authorize(ctx, t, args); err != nil {
 		return nil, err
 	}
 	start := time.Now()

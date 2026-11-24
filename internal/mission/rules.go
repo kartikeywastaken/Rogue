@@ -14,6 +14,7 @@ type Rules struct {
 	Excluded         []string
 	AllowedTools     []string
 	PreapprovedTools []string
+	AllowedPorts     []int
 }
 
 func (r Rules) clone() Rules {
@@ -21,6 +22,7 @@ func (r Rules) clone() Rules {
 	r.Excluded = slices.Clone(r.Excluded)
 	r.AllowedTools = slices.Clone(r.AllowedTools)
 	r.PreapprovedTools = slices.Clone(r.PreapprovedTools)
+	r.AllowedPorts = slices.Clone(r.AllowedPorts)
 	return r
 }
 func canonical(s string) string {
@@ -28,6 +30,11 @@ func canonical(s string) string {
 }
 
 func (r Rules) Validate() error {
+	for _, port := range r.AllowedPorts {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("invalid allowed port %d", port)
+		}
+	}
 	for _, set := range [][]string{r.Scope, r.Excluded} {
 		for _, s := range set {
 			if _, err := netip.ParsePrefix(s); err == nil {
@@ -47,6 +54,10 @@ func (r Rules) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (r Rules) AllowsPort(port int) bool {
+	return port > 0 && port <= 65535 && (len(r.AllowedPorts) == 0 || slices.Contains(r.AllowedPorts, port))
 }
 func matches(entries []string, host string) bool {
 	host = canonical(strings.Trim(host, "[]"))
