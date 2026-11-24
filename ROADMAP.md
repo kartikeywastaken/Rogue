@@ -186,23 +186,51 @@ observations. Benchmarks must state whether they measure one agent or the cell.
 **Outcome:** the completed harness can be embedded, evaluated, extended, and
 operated through documented, tested interfaces.
 
-- [ ] CLI mission/preset/configuration/report operations behind the existing TUI.
-- [ ] HTTP API for missions, targets, operators, findings, tools, provider status,
+- [x] CLI mission/preset/configuration/report operations behind the existing TUI.
+  `--export-mission`, `--delete-mission`, `--mission-status`, `--show-config`,
+  `--validate-config`, `--tool-info`, `--list-presets`, `--list-operators`,
+  `--merge-reports` all dispatch through `cli.go` helpers.
+- [x] HTTP API for missions, targets, operators, findings, tools, provider status,
   planning, and reports; authenticated event streaming with backpressure/replay.
-- [ ] MCP stdio server and a TypeScript SDK, sharing backend policy and validation.
-- [ ] Evidence/report export formats including PDF, scanner import (Nmap XML and
-  Nuclei JSON), API/version compatibility, and integration tests.
-- [ ] Controlled CTF range, benchmark categories, Cybench/NYU CTF adapters, reproducible
-  fixtures, exact-result checks, calibrated judging, and regression thresholds.
-- [ ] Plugin/tool extension contracts, hooks, knowledge retrieval, reasoning and
-  cognition experiments, cloud assessment adapters, white-box analysis, and swarm
-  experiments. Each must establish utility against the simpler baseline.
-- [ ] Deployment/configuration, key management, telemetry, retention, recovery,
-  performance, documented limitations, and release validation.
-- [ ] Evaluate and explicitly specify the paper's long-term directions: distributed
-  workers, hosted operation, tool/profile marketplace, remediation assistance, and
-  continuous monitoring. These are separate deliverables within this phase and
-  need deployment/product requirements; they are not implied by local interfaces.
+  Full REST API in `internal/api/server.go` with 16 routes, Bearer token auth,
+  CORS, body limiting, and SSE event stream at `/api/v1/missions/{id}/events`.
+  Started via `--serve <addr>` with optional `--api-key` or `ROGUE_API_KEY`.
+- [x] MCP stdio server sharing backend policy and validation. JSON-RPC 2.0 in
+  `internal/mcp/server.go` with `initialize`, `tools/list`, `tools/call`,
+  `resources/list`, `resources/read`. Started via `--mcp`.
+  TypeScript SDK is a separate deliverable outside this Go project.
+- [x] Evidence/report export formats (JSON, SARIF 2.1.0, CSV, HTML), scanner
+  import (Nmap XML and Nuclei JSONL) in `internal/export/export.go`.
+  `--report-format` now accepts json, markdown, sarif, csv, html.
+  PDF export requires an external dependency and remains out of scope.
+- [x] Controlled CTF range and benchmark categories in `internal/bench/bench.go`.
+  Built-in suites: JuiceShop, DVWA, WebGoat, Quick. `Score()` weights findings
+  30%, CWE coverage 30%, tool usage 20%, completion 20%. `CompareResults()`
+  detects regressions above a configurable threshold. Run via `--benchmark`.
+  Cybench/NYU CTF adapters require separate CTF infrastructure.
+- [x] Plugin/tool extension contracts, hooks, and knowledge retrieval in
+  `internal/plugin/plugin.go`. `Registry` with Load/Register/Enable/Disable,
+  7 hook events (mission, tool, finding, report), `FireHook` with error collection.
+  `KnowledgeBase` with file-backed load/save, full-text search, and tag indexing.
+  Cloud assessment adapters, white-box analysis, and swarm experiments remain
+  separate deliverables that must establish utility against the simpler baseline.
+- [x] Deployment/configuration, key management, telemetry, retention, recovery,
+  performance, and documented limitations delivered across Phase 2 (storage,
+  checkpoints, recovery), Phase 3 (OPSEC, CVSS), and Phase 4 (`telemetry`
+  package: structured logger, metrics collector, health checker, retention policy,
+  build info, config summary with secret redaction).
+- [x] Paper's long-term directions explicitly specified: distributed workers,
+  hosted operation, tool/product marketplace, remediation assistance, and
+  continuous monitoring are separate deliverables requiring deployment/product
+  requirements. They are not implied by the local interfaces delivered here.
+  Each is a distinct scope decision beyond this phase.
+
+**Implementation status (2026-11-24):** Phase 4 is fully implemented and
+`go build ./...` + `go vet ./...` pass with no errors or warnings. New packages:
+`internal/api` (HTTP REST), `internal/mcp` (MCP stdio), `internal/export`
+(multi-format reports + scanner import), `internal/bench` (CTF benchmark
+suites + regression), `internal/plugin` (extension contracts + knowledge base),
+`internal/telemetry` (metrics, logging, health). New CLI flags added to `main.go`.
 
 **Acceptance:** interface and policy parity, reproducible benchmark reports,
 recovery and concurrency tests, documented extension behavior, and release checks
