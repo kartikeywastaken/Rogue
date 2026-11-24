@@ -23,6 +23,7 @@ const PathEnv = "ROGUE_CREDENTIALS_FILE"
 type File struct {
 	Provider string            `json:"provider,omitempty"`
 	Model    string            `json:"model,omitempty"`
+	BaseURL  string            `json:"base_url,omitempty"` // for custom OpenAI-compatible endpoints
 	Keys     map[string]string `json:"keys,omitempty"`
 }
 
@@ -122,13 +123,20 @@ func (f File) WithKey(provider, model, key string) File {
 		keys[provider] = key
 	}
 	f.Provider, f.Model, f.Keys = provider, model, keys
+	f.BaseURL = ""
+	return f
+}
+
+// WithBaseURL records the endpoint for the current provider.
+func (f File) WithBaseURL(baseURL string) File {
+	f.BaseURL = baseURL
 	return f
 }
 
 // Getenv layers saved values beneath base: any variable base sets wins, and
 // saved values only fill the gaps. keyEnv maps a provider to its key variable.
 func (f File) Getenv(base func(string) string, keyEnv func(provider string) string) func(string) string {
-	saved := map[string]string{"ROGUE_PROVIDER": f.Provider, "ROGUE_MODEL": f.Model}
+	saved := map[string]string{"ROGUE_PROVIDER": f.Provider, "ROGUE_MODEL": f.Model, "ROGUE_BASE_URL": f.BaseURL}
 	for provider, key := range f.Keys {
 		if name := keyEnv(provider); name != "" {
 			saved[name] = key
@@ -136,8 +144,8 @@ func (f File) Getenv(base func(string) string, keyEnv func(provider string) stri
 	}
 	get := Overlay(saved, base)
 	return func(name string) string {
-		// A saved model only makes sense with the provider it was saved for.
-		if name == "ROGUE_MODEL" && !strings.EqualFold(strings.TrimSpace(get("ROGUE_PROVIDER")), f.Provider) {
+		// A saved model or endpoint only makes sense with the provider it was saved for.
+		if (name == "ROGUE_MODEL" || name == "ROGUE_BASE_URL") && !strings.EqualFold(strings.TrimSpace(get("ROGUE_PROVIDER")), f.Provider) {
 			return base(name)
 		}
 		return get(name)

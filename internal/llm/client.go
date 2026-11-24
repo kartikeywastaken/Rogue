@@ -21,6 +21,10 @@ type Client struct {
 	Client                 *http.Client
 	MaxOutputTokens        int
 	Retries                int
+	// Lenient accepts tool-call stream shapes some compatibility layers emit:
+	// finish_reason "stop" alongside tool calls, deltas without an index, or
+	// calls without an id. Each call is still fully validated before use.
+	Lenient bool
 }
 
 func NewOpenRouter(key string) *Client {
@@ -37,7 +41,7 @@ type chatRequest struct {
 	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
 }
 type sseToolCallDelta struct {
-	Index    int    `json:"index"`
+	Index    *int   `json:"index"`
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
@@ -113,6 +117,27 @@ func (c *Client) ChatStream(ctx context.Context, model string, msgs []Message, t
 	return account(ctx, out, allowance), nil
 }
 
+// toolIndex resolves which pending call a delta extends. An explicit index
+// always wins. Without one, lenient mode infers it: a function name arrives once,
+// at the start of a call, so a second name (or a different id) starts a new
+// call; anything else continues the previous one.
+func (c *Client) toolIndex(d sseToolCallDelta, calls map[int]*struct{ id, name, args string }, last int) int {
+	if d.Index != nil {
+		return *d.Index
+	}
+	if !c.Lenient {
+		return 0 // unchanged strict behavior: an absent index decodes as 0
+	}
+	if last < 0 {
+		return 0
+	}
+	prev := calls[last]
+	if (d.ID != "" && prev.id != "" && d.ID != prev.id) || (d.Function.Name != "" && prev.name != "") {
+		return len(calls)
+	}
+	return last
+}
+
 func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- StreamDelta) {
 	defer close(out)
 	defer body.Close()
@@ -125,12 +150,13 @@ func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- Str
 		}
 	}
 	fail := func(err error) { send(StreamDelta{Err: err}) }
-	type pending struct{ id, name, args string }
+	type pending = struct{ id, name, args string } // alias so toolIndex can share it
 	calls := map[int]*pending{}
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	finished := false
 	reason := ""
+	lastIndex := -1
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			return
@@ -179,18 +205,20 @@ func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- Str
 				return
 			}
 			for _, d := range ch.Delta.ToolCalls {
-				if d.Index < 0 || d.Index > 127 {
+				index := c.toolIndex(d, calls, lastIndex)
+				if index < 0 || index > 127 {
 					fail(errors.New("tool index outside supported range"))
 					return
 				}
+				lastIndex = index
 				if d.Type != "" && d.Type != "function" {
 					fail(errors.New("unsupported tool call type"))
 					return
 				}
-				p := calls[d.Index]
+				p := calls[index]
 				if p == nil {
 					p = &pending{}
-					calls[d.Index] = p
+					calls[index] = p
 				}
 				if d.ID != "" {
 					if p.id != "" && p.id != d.ID {
@@ -230,6 +258,9 @@ func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- Str
 		fail(fmt.Errorf("incomplete response: finish reason %q", reason))
 		return
 	}
+	if c.Lenient && reason == "stop" && len(calls) > 0 {
+		reason = "tool_calls"
+	}
 	if (reason == "tool_calls") != (len(calls) > 0) {
 		fail(errors.New("finish reason does not match tool calls"))
 		return
@@ -243,6 +274,9 @@ func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- Str
 	seen := map[string]bool{}
 	for _, i := range indices {
 		p := calls[i]
+		if p.id == "" && c.Lenient {
+			p.id = fmt.Sprintf("call_%d", i)
+		}
 		var obj map[string]json.RawMessage
 		if p.id == "" || p.name == "" || seen[p.id] || json.Unmarshal([]byte(p.args), &obj) != nil || obj == nil {
 			fail(errors.New("incomplete or invalid tool call"))

@@ -502,5 +502,59 @@ unverified in this environment because no keys or model are configured.
   OPENROUTER_API_KEY? Now, if you pick 'save on this machine', where does the key
   end up and who can read it?" Asked 2026-11-24. Awaiting learner.
 
+### Scope extension — more providers (2026-11-24)
+- Learner moved on to a new request without answering S3-B0 (recorded as
+  deferred, not failed). Added: gemini, mistral, deepseek, xai, together,
+  fireworks, cerebras, lmstudio, and `custom` (any OpenAI-compatible endpoint,
+  ROGUE_BASE_URL required, ROGUE_CUSTOM_API_KEY optional) in internal/llm/config.go.
+- New security rule: a key is never sent over plain HTTP except to a loopback
+  host (isLoopback uses net.ParseIP(...).IsLoopback, not a string prefix, so
+  `localhost.evil.example` is refused). --show-config redaction now derives from
+  llm.KeyEnvs() instead of a hand-kept list.
+- New parser tolerance: Client.Lenient (gemini, lmstudio, custom only) accepts
+  finish_reason "stop" with tool calls, infers a missing tool-call index (a
+  second function name starts a new call), and synthesizes missing ids. Strict
+  providers keep the old behavior. Bug caught during development: the first
+  index heuristic merged two id-less calls; caught by TestLenientToolCallStream.
+- Unverified: live behavior of every new provider (no keys in this environment).
+  Gemini docs confirm base URL, Bearer auth, and stream_options; they do not
+  state the streamed tool-call finish_reason or index/id shape.
+- Added stage:
+  - [ ] T4. Provider breadth vs strictness: why lenience is opt-in per provider,
+    why the loopback check parses the IP, why the redaction list is derived.
+
+#### S3-T4-Q1 — loopback lookalike (pending)
+- Question: "With ROGUE_PROVIDER=custom, ROGUE_CUSTOM_API_KEY set, and
+  ROGUE_BASE_URL=http://localhost.attacker.example/v1, what does Rogue do and
+  why? What would go wrong if the check were strings.HasPrefix(host, "localhost")?"
+  Asked 2026-11-24. Awaiting learner.
+
+### Scope extension — Experiential Labs, Alibaba Cloud, model catalogs (2026-11-24)
+- Providers: experientiallabs (EXPLABS_API_KEY), alibaba (DASHSCOPE_API_KEY,
+  Singapore), alibaba-cn (DASHSCOPE_CN_API_KEY, Beijing; region-bound keys). No
+  real key was embedded in source; each user enters their own.
+- Model catalog: llm.LoadEndpoint (split out of LoadConfig) + llm.ListModels
+  (GET {base}/models; Anthropic uses x-api-key). main.resolveSetup is shared by
+  connectProvider and listModels so both obey the same key/transport rules.
+  TUI fetches in a tea.Cmd tagged with seq (stale replies dropped), shows a
+  filterable list, falls back to typing on any error.
+- Untrusted-input handling: 16 MiB cap, 5000 IDs, 200-char IDs, IDs with
+  control/space chars dropped (blocks terminal escape injection), error bodies
+  redacted and stripped of control chars, models flagged as no-tools hidden.
+- Bug caught during development: an untouched saved model not in the catalog
+  would be replaced by the first listed model on ↵; fixed with `navigated`
+  and covered by TestUntouchedSavedModelWinsOverCatalog.
+- Added stage:
+  - [ ] T5. Treating a provider's response as untrusted input: why model IDs
+    are sanitized before rendering, why the catalog request reuses LoadEndpoint.
+
+#### S3-T5-Q1 — hostile catalog (pending)
+- Question: "A malicious custom endpoint returns a model id containing
+  `\x1b[2J\x1b[31m...`. What could happen if Rogue rendered it as-is, and which
+  function stops it?" Asked 2026-11-24. Awaiting learner.
+
 ### Current position (Session 3)
-- Status: awaiting learner on S3-B0. Session 2's S1-Q1 is still pending separately.
+- Status: awaiting learner. Pending: S3-B0 (deferred), S3-T4-Q1, S3-T5-Q1.
+  Learner has moved through three feature requests without answering; keep
+  offering one question per change, never block work on it.
+  Session 2's S1-Q1 is still pending separately.

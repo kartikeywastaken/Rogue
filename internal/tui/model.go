@@ -82,6 +82,7 @@ type Model struct {
 	setupCfg *Setup      // nil when in-TUI provider setup is unavailable
 	setup    *setupState // non-nil while the setup screen is open
 	provider string      // provider connected through setup, if any
+	baseURL  string      // its base URL, when the provider needs one
 }
 
 // eventMsg carries one engine event back onto the Elm loop. ch identifies the
@@ -196,8 +197,11 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	case connectedMsg:
 		return m.onConnected(msg)
 
+	case modelsMsg:
+		return m.onModels(msg)
+
 	case spinner.TickMsg:
-		if !m.running && (m.setup == nil || m.setup.step != stepConnecting) {
+		if !m.running && (m.setup == nil || (m.setup.step != stepConnecting && !m.setup.loading)) {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -213,6 +217,8 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if s := m.setup; s != nil {
 			switch s.step {
+			case stepURL:
+				s.url, cmd = s.url.Update(msg)
 			case stepKey:
 				s.key, cmd = s.key.Update(msg)
 			case stepModel:
@@ -469,6 +475,7 @@ func (m *Model) layout() {
 	m.input.SetWidth(ww - 4) // rounded border + 1 col padding each side
 	if s := m.setup; s != nil {
 		w := min(ww, 72) - 4 - 2 // box chrome, then the "› " prompt
+		s.url.SetWidth(w)
 		s.key.SetWidth(w)
 		s.model.SetWidth(w)
 	}

@@ -12,6 +12,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"rogue/internal/llm"
 )
 
 // ── metrics ──────────────────────────────────────────────────────────────────
@@ -472,10 +474,7 @@ func SummarizeConfig() ConfigSummary {
 		}
 	}
 	// Redact secrets
-	for _, key := range []string{
-		"OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-		"GROQ_API_KEY", "NVD_API_KEY", "ROGUE_API_KEY",
-	} {
+	for _, key := range append(llm.KeyEnvs(), "NVD_API_KEY", "ROGUE_API_KEY") {
 		if value := os.Getenv(key); value != "" {
 			if len(value) > 8 {
 				env[key] = value[:4] + "..." + value[len(value)-4:]

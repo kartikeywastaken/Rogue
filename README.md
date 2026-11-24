@@ -20,7 +20,11 @@ Supply credentials through your environment or secret manager, not source files.
 **Or configure from the TUI.** If no provider is configured, `go run .` opens a
 setup screen: choose a provider, paste the API key (masked), enter a model ID,
 then pick *save on this machine* or *this session only*. `/provider` reopens it
-later to switch provider, key, or model. Saved keys go to
+later to switch provider, key, or model. Once the key is entered, the model step
+loads the provider's catalog (`GET /models`, no tokens used) as a filterable list;
+models the provider marks as unable to call tools are hidden. If the catalog
+can't be loaded (no such endpoint, rejected key, offline), type the ID instead.
+A 401 here is an early sign the key is wrong. Saved keys go to
 `<user config dir>/rogue/credentials.json` (macOS: `~/Library/Application Support/rogue/`)
 with `0600` permissions, never the project tree. Environment variables always win
 over saved values, a key from the environment is never copied to disk, and a
@@ -31,10 +35,33 @@ file; `ROGUE_CREDENTIALS_FILE=off` disables it. Headless modes (`--assess`,
 | `ROGUE_PROVIDER` | Required credential | Default API base |
 |---|---|---|
 | `openrouter` (default) | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
-| `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
-| `groq` | `GROQ_API_KEY` | `https://api.groq.com/openai/v1` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1` (native Messages API) |
+| `openai` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
+| `gemini` (or `google`) | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `mistral` | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1` |
+| `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` |
+| `xai` (or `grok`) | `XAI_API_KEY` | `https://api.x.ai/v1` |
+| `groq` | `GROQ_API_KEY` | `https://api.groq.com/openai/v1` |
+| `together` | `TOGETHER_API_KEY` | `https://api.together.xyz/v1` |
+| `fireworks` | `FIREWORKS_API_KEY` | `https://api.fireworks.ai/inference/v1` |
+| `cerebras` | `CEREBRAS_API_KEY` | `https://api.cerebras.ai/v1` |
+| `experientiallabs` (or `explabs`) | `EXPLABS_API_KEY` | `https://api.experientiallabs.ai/v1` |
+| `alibaba` (or `dashscope`, `qwen`), Singapore | `DASHSCOPE_API_KEY` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| `alibaba-cn` (or `aliyun`), Beijing | `DASHSCOPE_CN_API_KEY` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `ollama` or `local` | None | `http://localhost:11434/v1` |
+| `lmstudio` | None | `http://localhost:1234/v1` |
+| `custom` (or `openai-compatible`) | `ROGUE_CUSTOM_API_KEY` (optional) | `ROGUE_BASE_URL` (required) |
+
+Every provider except `anthropic` uses the OpenAI Chat Completions protocol with
+streaming and function calling; pick a model that supports tool calls. `custom`
+covers anything else that speaks that protocol (vLLM, LiteLLM, a gateway). An API
+key is only ever sent over HTTPS or to a loopback address. Alibaba Cloud keys are
+region-bound, so each region is a separate provider with its own key; for another
+region (e.g. US/Virginia) use `custom` with that region's `compatible-mode/v1` URL.
+Gemini, Experiential Labs, Alibaba Cloud, LM Studio and
+`custom` use a tolerant stream parser (accepts `finish_reason: "stop"` with tool
+calls and tool-call deltas without `index`/`id`); every call is still validated.
+Verify a new provider with `--check-provider` (one small paid request).
 
 `ROGUE_MODEL` is required. `ROGUE_MODELS` optionally supplies additional,
 comma-separated model IDs for the existing model picker; the default model is

@@ -1,2 +1,13 @@
 rogue
 .rogue/
+
+# Secrets: never commit. Rogue stores TUI-entered keys outside the repo
+# (<user config dir>/rogue/credentials.json); these catch accidental copies.
+.env
+.env.*
+!.env.example
+credentials.json
+*.pem
+*.key
+*.p12
+.claude/settings.local.json

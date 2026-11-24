@@ -1,11 +1,13 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"rogue/internal/testutil"
 	"rogue/internal/tui"
 )
 
@@ -90,5 +92,53 @@ func TestConnectProviderSavesOnlyWhenAsked(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if strings.Contains(string(data), "gsk-from-env") {
 		t.Fatal("environment key persisted")
+	}
+}
+
+func TestConnectCustomEndpointPersistsBaseURL(t *testing.T) {
+	configEnv(t)
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv("ROGUE_CREDENTIALS_FILE", path)
+	if _, err := connectProvider(tui.Credentials{Provider: "custom", BaseURL: "http://10.1.2.3:8000/v1", APIKey: "secret", Model: "m"}); err == nil {
+		t.Fatal("key accepted over cleartext to a non-loopback host")
+	}
+	if _, err := connectProvider(tui.Credentials{Provider: "custom", BaseURL: "https://gw.example/v1", Model: "m", Remember: true}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadProviderConfig()
+	if err != nil || config.BaseURL != "https://gw.example/v1" || config.Provider != "custom" {
+		t.Fatal(config, err)
+	}
+	// Switching to a listed provider must not carry the custom endpoint along.
+	if _, err := connectProvider(tui.Credentials{Provider: "gemini", APIKey: "g-key-12345678", Model: "gm", Remember: true}); err != nil {
+		t.Fatal(err)
+	}
+	config, err = loadProviderConfig()
+	if err != nil || !strings.Contains(config.BaseURL, "generativelanguage") {
+		t.Fatal(config.BaseURL, err)
+	}
+}
+
+func TestListModelsUsesSavedKeyAndEndpointRules(t *testing.T) {
+	configEnv(t)
+	t.Setenv("ROGUE_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "credentials.json"))
+	var auth string
+	srv := testutil.NewServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.Write([]byte(`{"data":[{"id":"m-b"},{"id":"m-a"}]}`))
+	}))
+	defer srv.Close()
+	base := srv.URL + "/v1"
+	// Save a key once, then list with the key field left blank ("keep saved").
+	if _, err := connectProvider(tui.Credentials{Provider: "custom", BaseURL: base, APIKey: "saved-key-1", Model: "m-a", Remember: true}); err != nil {
+		t.Fatal(err)
+	}
+	models, err := listModels(tui.Credentials{Provider: "custom", BaseURL: base})
+	if err != nil || strings.Join(models, ",") != "m-a,m-b" || auth != "Bearer saved-key-1" {
+		t.Fatal(models, err, auth)
+	}
+	// Same transport rules as chat: no key over cleartext to a remote host.
+	if _, err := listModels(tui.Credentials{Provider: "custom", BaseURL: "http://10.9.9.9/v1", APIKey: "k"}); err == nil {
+		t.Fatal("catalog request would send a key over plain HTTP")
 	}
 }

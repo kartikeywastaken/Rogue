@@ -109,7 +109,7 @@ func (provider *Anthropic) ChatStream(ctx context.Context, model string, message
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Accept", "text/event-stream")
 		request.Header.Set("x-api-key", provider.APIKey)
-		request.Header.Set("anthropic-version", "2026-10-21")
+		request.Header.Set("anthropic-version", anthropicVersion)
 		return request, nil
 	})
 	if err != nil {

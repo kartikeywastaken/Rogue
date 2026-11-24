@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -201,8 +202,12 @@ func setupOptions() tui.SetupOptions {
 	if opts.Model == "" && opts.Provider == saved.Provider {
 		opts.Model = saved.Model
 	}
+	opts.BaseURL = strings.TrimSpace(os.Getenv("ROGUE_BASE_URL"))
+	if opts.BaseURL == "" && saved.Provider == llm.CustomProvider {
+		opts.BaseURL = saved.BaseURL
+	}
 	for _, p := range llm.Providers {
-		choice := tui.ProviderChoice{Name: p.Name, Label: p.Label, KeyEnv: p.KeyEnv, ModelHint: p.ModelHint}
+		choice := tui.ProviderChoice{Name: p.Name, Label: p.Label, KeyEnv: p.KeyEnv, ModelHint: p.ModelHint, KeyOptional: p.KeyOptional, NeedsURL: p.NeedsBaseURL}
 		if key := saved.Key(p.Name); key != "" {
 			choice.Existing = "saved " + credentials.Mask(key)
 		} else if p.KeyEnv != "" && strings.TrimSpace(os.Getenv(p.KeyEnv)) != "" {
@@ -213,28 +218,69 @@ func setupOptions() tui.SetupOptions {
 	return opts
 }
 
+// setupRequest is what the TUI's entries resolve to. Connecting and listing
+// models share it so both obey identical key and endpoint rules.
+type setupRequest struct {
+	info    llm.ProviderInfo
+	path    string
+	pathErr error
+	saved   credentials.File
+	loadErr error
+	key     string // typed, else saved; an environment key stays in the env
+	getenv  func(string) string
+}
+
+func resolveSetup(c tui.Credentials) (setupRequest, error) {
+	info, ok := llm.LookupProvider(c.Provider)
+	if !ok {
+		return setupRequest{}, fmt.Errorf("unsupported provider %q", c.Provider)
+	}
+	r := setupRequest{info: info}
+	r.path, r.pathErr = credentials.Path(os.Getenv)
+	r.saved, r.loadErr = credentials.Load(r.path)
+	r.key = strings.TrimSpace(c.APIKey)
+	if r.key == "" && r.loadErr == nil {
+		r.key = r.saved.Key(c.Provider) // "keep saved key"; env is the next fallback
+	}
+	values := map[string]string{"ROGUE_PROVIDER": c.Provider, "ROGUE_MODEL": c.Model}
+	if info.NeedsBaseURL {
+		values["ROGUE_BASE_URL"] = c.BaseURL
+	}
+	if info.KeyEnv != "" {
+		values[info.KeyEnv] = r.key
+	}
+	r.getenv = credentials.Override(values, os.Getenv)
+	return r, nil
+}
+
+// listModels is the TUI's ListModels callback: the provider's catalog for the
+// entered key. It costs no tokens. Failure is fine; the user types the id.
+func listModels(c tui.Credentials) ([]string, error) {
+	r, err := resolveSetup(c)
+	if err != nil {
+		return nil, err
+	}
+	config, err := llm.LoadEndpoint(r.getenv)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return llm.ListModels(ctx, config, nil)
+}
+
 // connectProvider is the TUI's Connect callback. It validates the entered
 // settings through the same llm.LoadConfig path as environment variables,
 // builds a harness, and only then (if asked) persists the key.
 func connectProvider(c tui.Credentials) (engine.Engine, error) {
-	info, ok := llm.LookupProvider(c.Provider)
-	if !ok {
-		return nil, fmt.Errorf("unsupported provider %q", c.Provider)
-	}
-	path, err := credentials.Path(os.Getenv)
-	if err != nil && c.Remember {
+	r, err := resolveSetup(c)
+	if err != nil {
 		return nil, err
 	}
-	saved, loadErr := credentials.Load(path)
-	key := strings.TrimSpace(c.APIKey)
-	if key == "" && loadErr == nil {
-		key = saved.Key(c.Provider) // "keep saved key"; env is the next fallback
+	if r.pathErr != nil && c.Remember {
+		return nil, r.pathErr
 	}
-	values := map[string]string{"ROGUE_PROVIDER": c.Provider, "ROGUE_MODEL": c.Model}
-	if info.KeyEnv != "" {
-		values[info.KeyEnv] = key
-	}
-	config, err := llm.LoadConfig(credentials.Override(values, os.Getenv))
+	config, err := llm.LoadConfig(r.getenv)
 	if err != nil {
 		return nil, err
 	}
@@ -243,12 +289,16 @@ func connectProvider(c tui.Credentials) (engine.Engine, error) {
 		return nil, err
 	}
 	if c.Remember {
-		if loadErr != nil {
-			return harness, fmt.Errorf("connected, but not saved: %w", loadErr)
+		if r.loadErr != nil {
+			return harness, fmt.Errorf("connected, but not saved: %w", r.loadErr)
 		}
 		// Only a key typed or already saved is written: a key that came from
 		// the environment is never silently copied to disk.
-		if err := credentials.Save(path, saved.WithKey(c.Provider, c.Model, key)); err != nil {
+		next := r.saved.WithKey(c.Provider, c.Model, r.key)
+		if r.info.NeedsBaseURL {
+			next = next.WithBaseURL(config.BaseURL)
+		}
+		if err := credentials.Save(r.path, next); err != nil {
 			return harness, fmt.Errorf("connected, but not saved: %w", err)
 		}
 	}

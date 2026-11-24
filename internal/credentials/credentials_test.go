@@ -7,7 +7,9 @@ import (
 	"testing"
 )
 
-func keyEnv(p string) string { return map[string]string{"openai": "OPENAI_API_KEY", "groq": "GROQ_API_KEY"}[p] }
+func keyEnv(p string) string {
+	return map[string]string{"openai": "OPENAI_API_KEY", "groq": "GROQ_API_KEY"}[p]
+}
 
 func TestSaveLoadRoundTripIsOwnerOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "credentials.json")
