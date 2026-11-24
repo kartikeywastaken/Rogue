@@ -455,3 +455,52 @@ unverified in this environment because no keys or model are configured.
 
 #### S1-Q1 — baseline (pending)
 - Question: see chat. Asked 2026-11-24. Awaiting learner.
+
+## Session 3 — in-TUI provider / API-key setup (2026-11-24)
+
+- Goal: bounded debrief of the in-TUI provider setup feature, focused on the
+  security takeaways (secrets at rest, file permissions, atomic writes,
+  config precedence, keeping keys off the screen).
+- Budget (learner prefers a clear endpoint): baseline + 3 stages, one question
+  each, optional integrated scenario. Then close.
+- Snapshot: HEAD dd8d871 plus uncommitted working tree. Assistant's work for this
+  feature: new internal/credentials/{credentials.go,credentials_test.go},
+  internal/tui/{setup.go,setup_test.go}; edits to internal/llm/config.go,
+  internal/tui/{model.go,view.go,commands.go}, config.go, main.go, cli.go,
+  main_test.go, README.md. Other dirty files (ROADMAP.md, assessment.go,
+  internal/api, internal/mcp, internal/storage) predate this session's work.
+- Executed checks (assistant evidence, not learner evidence): `go test ./...`
+  passes; real binary driven with `expect` with no env vars: setup screen opened,
+  the pasted fake key appeared 0 times in terminal output, credentials.json was
+  written with mode 0600.
+- Bug caught during development: `File.Getenv` read ROGUE_PROVIDER once at
+  construction, so a later env change still leaked the saved model; fixed by
+  checking lazily inside the returned closure (caught by
+  TestEnvironmentBeatsSavedValues).
+
+### Stage map
+
+- [ ] B0. Baseline: learner restates the old failure and the new flow.
+- [ ] T1. Secret at rest: 0600 file / 0700 dir in os.UserConfigDir (not the repo),
+  Load refuses group/other-readable files and symlinks (ssh-style), Save writes a
+  temp file + fsync + rename (atomic). Source: internal/credentials/credentials.go
+  Load, Save.
+- [ ] T2. Precedence and persistence: startup uses Overlay (env wins, saved fills
+  gaps); TUI connect uses Override (typed > saved > env); a key from the env is
+  never written to disk; save happens only after buildHarness succeeds.
+  Source: config.go loadProviderConfig, connectProvider.
+- [ ] T3. TUI mechanics: EchoPassword masking, PasteMsg routed to the active
+  setup field, Connect runs in a tea.Cmd returning connectedMsg, and the
+  typed-nil interface trap (nil *Harness inside engine.Engine != nil).
+  Source: internal/tui/setup.go, config.go buildEngine, main.go TUI branch.
+- [ ] Optional integrated scenario.
+
+### Attempts
+
+#### S3-B0 — baseline (pending)
+- Question: "Before this change, what happened when you ran `go run .` with no
+  OPENROUTER_API_KEY? Now, if you pick 'save on this machine', where does the key
+  end up and who can read it?" Asked 2026-11-24. Awaiting learner.
+
+### Current position (Session 3)
+- Status: awaiting learner on S3-B0. Session 2's S1-Q1 is still pending separately.

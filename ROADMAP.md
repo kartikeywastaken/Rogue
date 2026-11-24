@@ -117,10 +117,18 @@ measurable handoffs and actual capabilities appropriate to each role.
 - [x] Remaining research organs and large payload/reference datasets from paper §6.
   No fake implementations or simulated execution are registered for these modules.
   Nine organs (LEVIATHAN, SPHINX, GORGON, CERBERUS, TYPHON, GRIFFIN, SIMURGH,
-  HYDRA, ARACHNE) are registered as real arsenal tools in the "research" category,
-  backed by 200+ payloads, 50+ privesc techniques, 18 chain templates, 16 secret
-  patterns, and live mission context. Each tool performs real analysis and
-  explicitly disclaims execution or exploitability confirmation.
+  HYDRA, ARACHNE) are registered as real arsenal tools in the "research" category.
+  Each is an analysis and recommendation tool, not an autonomous executor:
+  LEVIATHAN plans kill-chain sequences but does not dispatch tasks or modify state.
+  GORGON selects payload candidates for operator review; it does not deliver or
+  execute them. HYDRA identifies parallel attack vectors for structured assessment;
+  it does not execute vectors autonomously. All nine organs explicitly disclaim
+  execution or exploitability confirmation.
+  Reference data: 50 base payload families with 150 encoding variants (200 research
+  cases total, not 200 independent exploitation techniques), 50+ privilege-escalation
+  techniques ranked by environment, 18 attack-chain templates, 16 secret-detection
+  patterns, and live mission context. The 200-case count is encoding breadth, not
+  independently validated exploit count.
 
 **Operational implementation:** a nine-task baseline covers eight roles, including
 Coordinator planning and a second supervision step after Scanner. The supervisor
@@ -169,11 +177,13 @@ configured OPSEC thresholds; generic failures are not described as detection.
 
 **Remaining scope:** the paper's advanced research organs are now implemented as
 nine analysis tools (LEVIATHAN, SPHINX, GORGON, CERBERUS, TYPHON, GRIFFIN,
-SIMURGH, HYDRA, ARACHNE) backed by the reference datasets. Large payload corpus
-(200+ encoded variants), privilege escalation ranking (50+ Linux/Windows
-techniques), and chain hypothesis building (18 templates) are operational.
-Arbitrary OS privilege escalation/persistence execution, unrestricted scanner
-wrappers, and automatic confirmation of arbitrary CVEs remain out of scope.
+SIMURGH, HYDRA, ARACHNE) backed by reference datasets. 50 base payload families
+with 150 encoding variants (200 research cases total), privilege-escalation
+ranking (50+ Linux/Windows techniques), and chain hypothesis building (18
+templates) are operational. These are analysis and recommendation tools; they do
+not autonomously execute, deliver, or dispatch. Arbitrary OS privilege
+escalation/persistence execution, unrestricted scanner wrappers, and automatic
+confirmation of arbitrary CVEs remain out of scope.
 The operational assessment backend and research catalog are delivered.
 
 **Acceptance:** demonstrate multi-operator dependency handoffs against controlled

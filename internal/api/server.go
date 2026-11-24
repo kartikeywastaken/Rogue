@@ -19,6 +19,57 @@ import (
 	"rogue/internal/telemetry"
 )
 
+// eventBus fans one mission's event stream out to any number of SSE subscribers.
+type eventBus struct {
+	mu   sync.Mutex
+	subs []chan engine.Event
+	done bool
+}
+
+func (b *eventBus) subscribe() chan engine.Event {
+	ch := make(chan engine.Event, 64)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.done {
+		close(ch)
+		return ch
+	}
+	b.subs = append(b.subs, ch)
+	return ch
+}
+
+func (b *eventBus) unsubscribe(ch chan engine.Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, s := range b.subs {
+		if s == ch {
+			b.subs = append(b.subs[:i], b.subs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (b *eventBus) publish(ev engine.Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, ch := range b.subs {
+		select {
+		case ch <- ev:
+		default: // drop if subscriber is too slow
+		}
+	}
+}
+
+func (b *eventBus) close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.done = true
+	for _, ch := range b.subs {
+		close(ch)
+	}
+	b.subs = nil
+}
+
 // Server is the ROGUE HTTP API server.
 type Server struct {
 	harness  *engine.Harness
@@ -26,7 +77,7 @@ type Server struct {
 	store    *storage.Store
 	apiKey   string
 	mux      *http.ServeMux
-	streams  sync.Map // mission ID → []chan engine.Event
+	streams  sync.Map // mission ID → *eventBus
 }
 
 // New creates a wired API server.
@@ -131,20 +182,30 @@ func (s *Server) handleGetMission(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
+// handleDeleteMission removes the persisted checkpoint for a mission. Active
+// in-memory runs are not interrupted; they will fail to checkpoint after
+// deletion.
 func (s *Server) handleDeleteMission(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if s.store == nil {
 		writeError(w, http.StatusServiceUnavailable, "storage not configured")
 		return
 	}
-	if _, err := s.store.Load(id); err != nil {
+	if err := s.store.Delete(id); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
 }
 
+// handleStartMission launches a mission run using the configured provider.
+// It returns the harness-assigned mission ID (not a client-generated placeholder)
+// and immediately registers an event bus for SSE subscribers.
 func (s *Server) handleStartMission(w http.ResponseWriter, r *http.Request) {
+	if s.harness == nil {
+		writeError(w, http.StatusServiceUnavailable, "harness not configured — no LLM provider available")
+		return
+	}
 	var body struct {
 		Prompt string `json:"prompt"`
 		Mode   string `json:"mode"`
@@ -171,13 +232,43 @@ func (s *Server) handleStartMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request := engine.Request{Prompt: body.Prompt, Mode: mode, Model: body.Model}
-	missionID := domain.ID()
+
+	// Start the run. The harness goroutine assigns the mission ID via prepare().
+	eventCh := s.harness.Run(context.Background(), request)
+
+	// Poll briefly (≤100 ms) for the goroutine to register the run state.
+	var missionID string
+	for i := 0; i < 20 && missionID == ""; i++ {
+		time.Sleep(5 * time.Millisecond)
+		if state := s.harness.LastRun(); state != nil {
+			missionID = state.Control.Snapshot().ID
+		}
+	}
+	if missionID == "" {
+		go func() { for range eventCh {} }() // drain to unblock goroutine
+		writeError(w, http.StatusInternalServerError, "mission failed to initialise; check provider configuration")
+		return
+	}
+
+	// Register event bus so SSE clients can subscribe.
+	bus := &eventBus{}
+	s.streams.Store(missionID, bus)
+
+	// Fan events from the harness channel to all SSE subscribers.
 	go func() {
-		ctx := context.Background()
-		for range s.harness.Run(ctx, request) {
+		defer func() {
+			bus.close()
+			s.streams.Delete(missionID)
+		}()
+		for event := range eventCh {
+			bus.publish(event)
 		}
 	}()
-	writeJSON(w, http.StatusAccepted, map[string]any{"mission_id": missionID, "status": "started"})
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"mission_id": missionID,
+		"status":     "started",
+	})
 }
 
 func (s *Server) handlePauseMission(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +320,10 @@ func (s *Server) handleMissionReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
+// handleMissionEvents streams live execution events over SSE. It first sends
+// a snapshot of the current mission state, then forwards real harness events
+// if the mission is still running. Each subscriber gets its own buffered channel
+// fed by the per-mission event bus.
 func (s *Server) handleMissionEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -242,19 +337,56 @@ func (s *Server) handleMissionEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-	// Try to get a report for context
-	report, err := s.harness.Report(id)
-	if err != nil {
-		fmt.Fprintf(w, "event: error\ndata: %q\n\n", err.Error())
+
+	// Send a snapshot of the current mission state.
+	if report, err := s.harness.Report(id); err == nil {
+		data, _ := json.Marshal(map[string]any{
+			"mission_id": id,
+			"status":     report.Mission.Status,
+			"tasks":      len(report.Mission.Tasks),
+			"findings":   report.Analysis.FindingsWithEvidence,
+		})
+		fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", data)
 		flusher.Flush()
-		return
 	}
-	data, _ := json.Marshal(map[string]any{"mission_id": id, "status": report.Mission.Status, "tasks": len(report.Mission.Tasks), "findings": report.Analysis.FindingsWithEvidence})
-	fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", data)
-	flusher.Flush()
-	// Keep alive until client disconnects
+
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
+
+	// If the mission has an active event bus, subscribe and forward real events.
+	if val, ok := s.streams.Load(id); ok {
+		bus := val.(*eventBus)
+		ch := bus.subscribe()
+		defer bus.unsubscribe(ch)
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case event, open := <-ch:
+				if !open {
+					fmt.Fprintf(w, "event: done\ndata: {\"mission_id\":%q}\n\n", id)
+					flusher.Flush()
+					return
+				}
+				data, _ := json.Marshal(map[string]any{
+					"kind":      kindString(event.Kind),
+					"text":      event.Text,
+					"tool_name": event.Tool.Name,
+					"tool_id":   event.Tool.ID,
+					"tool_ok":   event.Tool.OK,
+					"tool_out":  event.Tool.Output,
+					"error":     errStr(event.Err),
+				})
+				fmt.Fprintf(w, "event: update\ndata: %s\n\n", data)
+				flusher.Flush()
+			case <-ticker.C:
+				fmt.Fprintf(w, ": keepalive\n\n")
+				flusher.Flush()
+			}
+		}
+	}
+
+	// Mission not currently active — keepalive until client disconnects.
 	for {
 		select {
 		case <-r.Context().Done():
@@ -332,7 +464,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, telemetry.SummarizeConfig())
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -344,4 +476,32 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"error": message, "status": status})
+}
+
+func errStr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func kindString(k engine.Kind) string {
+	switch k {
+	case engine.KindText:
+		return "text"
+	case engine.KindToolStart:
+		return "tool_start"
+	case engine.KindToolEnd:
+		return "tool_end"
+	case engine.KindUsage:
+		return "usage"
+	case engine.KindNotice:
+		return "notice"
+	case engine.KindError:
+		return "error"
+	case engine.KindDone:
+		return "done"
+	default:
+		return "unknown"
+	}
 }

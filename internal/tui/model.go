@@ -23,6 +23,7 @@ type phase int
 const (
 	phaseLanding phase = iota
 	phaseSession
+	phaseSetup // provider / API key / model entry
 )
 
 type entryKind int
@@ -77,6 +78,10 @@ type Model struct {
 	jump bool // scroll to the tail on the next refresh
 
 	wmIdx int // wordmark style on the landing screen (tab cycles)
+
+	setupCfg *Setup      // nil when in-TUI provider setup is unavailable
+	setup    *setupState // non-nil while the setup screen is open
+	provider string      // provider connected through setup, if any
 }
 
 // eventMsg carries one engine event back onto the Elm loop. ch identifies the
@@ -94,7 +99,13 @@ func waitFor(ch <-chan engine.Event) tea.Cmd {
 	}
 }
 
-func New(eng engine.Engine) Model {
+// New starts the TUI on an already configured engine.
+func New(eng engine.Engine) Model { return NewWithSetup(eng, nil) }
+
+// NewWithSetup starts the TUI with in-app provider setup available through
+// /provider. When eng is nil (nothing configured yet) it opens on the setup
+// screen instead of the landing screen.
+func NewWithSetup(eng engine.Engine, setup *Setup) Model {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
@@ -123,18 +134,25 @@ func New(eng engine.Engine) Model {
 	}
 
 	model := ""
-	if ms := eng.Models(); len(ms) > 0 {
-		model = ms[0]
+	if eng != nil {
+		if ms := eng.Models(); len(ms) > 0 {
+			model = ms[0]
+		}
 	}
 
-	return Model{
-		eng:   eng,
-		input: ta,
-		vp:    vp,
-		spin:  sp,
-		model: model,
-		cwd:   cwd,
+	m := Model{
+		eng:      eng,
+		input:    ta,
+		vp:       vp,
+		spin:     sp,
+		model:    model,
+		cwd:      cwd,
+		setupCfg: setup,
 	}
+	if eng == nil {
+		m.openSetup()
+	}
+	return m
 }
 
 func inputStyles() textarea.Styles {
@@ -175,8 +193,11 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	case eventMsg:
 		return m.onEvent(msg)
 
+	case connectedMsg:
+		return m.onConnected(msg)
+
 	case spinner.TickMsg:
-		if !m.running {
+		if !m.running && (m.setup == nil || m.setup.step != stepConnecting) {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -190,6 +211,15 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		var cmd tea.Cmd
+		if s := m.setup; s != nil {
+			switch s.step {
+			case stepKey:
+				s.key, cmd = s.key.Update(msg)
+			case stepModel:
+				s.model, cmd = s.model.Update(msg)
+			}
+			return m, cmd
+		}
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 
@@ -206,6 +236,10 @@ func (m Model) onKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	m.flash = ""
+
+	if m.setup != nil {
+		return m.onSetupKey(msg)
+	}
 
 	if m.picker {
 		return m.onPickerKey(k)
@@ -433,6 +467,11 @@ func (m *Model) layout() {
 	}
 	ww := m.workWidth()
 	m.input.SetWidth(ww - 4) // rounded border + 1 col padding each side
+	if s := m.setup; s != nil {
+		w := min(ww, 72) - 4 - 2 // box chrome, then the "› " prompt
+		s.key.SetWidth(w)
+		s.model.SetWidth(w)
+	}
 	if m.phase == phaseLanding {
 		m.input.Placeholder = "Ask Rogue anything · / for commands"
 	} else {

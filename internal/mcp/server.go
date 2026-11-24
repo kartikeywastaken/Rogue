@@ -134,7 +134,11 @@ func (s *Server) handle(ctx context.Context, req Request) *Response {
 		if params.Arguments == nil {
 			params.Arguments = json.RawMessage("{}")
 		}
-		result, err := s.registry.Exec(ctx, params.Name, params.Arguments)
+		// Supply a permissive internal policy so offline tools (Base64, JWT,
+		// research organs, etc.) pass authorization. MCP callers take
+		// responsibility for the tools they invoke; scope is unrestricted here.
+		execCtx := arsenal.WithPolicy(ctx, arsenal.Policy{Mode: "auto"})
+		result, err := s.registry.Exec(execCtx, params.Name, params.Arguments)
 		if err != nil {
 			return respond(map[string]any{
 				"content": []map[string]any{{"type": "text", "text": err.Error()}},

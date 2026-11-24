@@ -21,9 +21,12 @@ func (m Model) View() tea.View {
 		return v
 	}
 	var body string
-	if m.phase == phaseLanding {
+	switch m.phase {
+	case phaseSetup:
+		body = m.viewSetup()
+	case phaseLanding:
 		body = m.viewLanding()
-	} else {
+	default:
 		v.MouseMode = tea.MouseModeCellMotion
 		body = m.viewSession()
 	}

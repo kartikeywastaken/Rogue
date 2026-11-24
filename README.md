@@ -17,6 +17,17 @@ startup error. Deterministic fixtures exist only in tests.
 Set a provider, a tool-capable model available to that provider, and its credential.
 Supply credentials through your environment or secret manager, not source files.
 
+**Or configure from the TUI.** If no provider is configured, `go run .` opens a
+setup screen: choose a provider, paste the API key (masked), enter a model ID,
+then pick *save on this machine* or *this session only*. `/provider` reopens it
+later to switch provider, key, or model. Saved keys go to
+`<user config dir>/rogue/credentials.json` (macOS: `~/Library/Application Support/rogue/`)
+with `0600` permissions, never the project tree. Environment variables always win
+over saved values, a key from the environment is never copied to disk, and a
+key file readable by other users is refused. `ROGUE_CREDENTIALS_FILE` moves the
+file; `ROGUE_CREDENTIALS_FILE=off` disables it. Headless modes (`--assess`,
+`--serve`, `--benchmark`, `--check-provider`) also read the saved file.
+
 | `ROGUE_PROVIDER` | Required credential | Default API base |
 |---|---|---|
 | `openrouter` (default) | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |

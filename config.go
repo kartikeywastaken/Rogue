@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -9,10 +10,21 @@ import (
 	"time"
 
 	"rogue/internal/arsenal"
+	"rogue/internal/credentials"
 	"rogue/internal/engine"
 	"rogue/internal/llm"
 	"rogue/internal/mission"
+	"rogue/internal/plugin"
 	"rogue/internal/storage"
+	"rogue/internal/telemetry"
+	"rogue/internal/tui"
+)
+
+// Process-level metrics collector and plugin registry.
+// These are shared across all mission execution paths in this process.
+var (
+	Metrics = telemetry.NewCollector()
+	Plugins = plugin.NewRegistry()
 )
 
 func newRegistry() *arsenal.Registry {
@@ -135,11 +147,112 @@ func openStore() (*storage.Store, error) {
 }
 
 func buildEngine() (engine.Engine, error) {
-	config, err := llm.LoadConfig(os.Getenv)
+	config, err := loadProviderConfig()
 	if err != nil {
 		return nil, err
 	}
-	return buildHarness(config.Client(), config.Models, config.Model)
+	// Return an untyped nil on failure: a nil *Harness inside a non-nil
+	// engine.Engine interface would pass an `eng == nil` check.
+	harness, err := buildHarness(config.Client(), config.Models, config.Model)
+	if err != nil {
+		return nil, err
+	}
+	return harness, nil
+}
+
+// keyEnv maps a provider name to the variable holding its API key.
+func keyEnv(provider string) string {
+	info, _ := llm.LookupProvider(provider)
+	return info.KeyEnv
+}
+
+// loadProviderConfig reads provider settings from the environment, falling
+// back to credentials saved from the TUI for anything the environment leaves
+// unset.
+func loadProviderConfig() (llm.Config, error) {
+	path, pathErr := credentials.Path(os.Getenv)
+	saved, loadErr := credentials.Load(path)
+	config, err := llm.LoadConfig(saved.Getenv(os.Getenv, keyEnv))
+	if err != nil {
+		// Only surface credential-file problems when they actually matter.
+		return config, errors.Join(err, pathErr, loadErr)
+	}
+	return config, nil
+}
+
+// setupOptions snapshots what is configured for the TUI setup screen. Key
+// values never leave this process; the screen only sees a masked hint.
+func setupOptions() tui.SetupOptions {
+	opts := tui.SetupOptions{}
+	path, err := credentials.Path(os.Getenv)
+	if err != nil {
+		opts.Warning = "cannot locate a config directory, keys will not be saved: " + err.Error()
+	}
+	opts.SavePath = path
+	saved, err := credentials.Load(path)
+	if err != nil {
+		opts.Warning = err.Error()
+	}
+	opts.Provider = strings.ToLower(strings.TrimSpace(os.Getenv("ROGUE_PROVIDER")))
+	opts.Model = strings.TrimSpace(os.Getenv("ROGUE_MODEL"))
+	if opts.Provider == "" {
+		opts.Provider = saved.Provider
+	}
+	if opts.Model == "" && opts.Provider == saved.Provider {
+		opts.Model = saved.Model
+	}
+	for _, p := range llm.Providers {
+		choice := tui.ProviderChoice{Name: p.Name, Label: p.Label, KeyEnv: p.KeyEnv, ModelHint: p.ModelHint}
+		if key := saved.Key(p.Name); key != "" {
+			choice.Existing = "saved " + credentials.Mask(key)
+		} else if p.KeyEnv != "" && strings.TrimSpace(os.Getenv(p.KeyEnv)) != "" {
+			choice.Existing = "from $" + p.KeyEnv
+		}
+		opts.Providers = append(opts.Providers, choice)
+	}
+	return opts
+}
+
+// connectProvider is the TUI's Connect callback. It validates the entered
+// settings through the same llm.LoadConfig path as environment variables,
+// builds a harness, and only then (if asked) persists the key.
+func connectProvider(c tui.Credentials) (engine.Engine, error) {
+	info, ok := llm.LookupProvider(c.Provider)
+	if !ok {
+		return nil, fmt.Errorf("unsupported provider %q", c.Provider)
+	}
+	path, err := credentials.Path(os.Getenv)
+	if err != nil && c.Remember {
+		return nil, err
+	}
+	saved, loadErr := credentials.Load(path)
+	key := strings.TrimSpace(c.APIKey)
+	if key == "" && loadErr == nil {
+		key = saved.Key(c.Provider) // "keep saved key"; env is the next fallback
+	}
+	values := map[string]string{"ROGUE_PROVIDER": c.Provider, "ROGUE_MODEL": c.Model}
+	if info.KeyEnv != "" {
+		values[info.KeyEnv] = key
+	}
+	config, err := llm.LoadConfig(credentials.Override(values, os.Getenv))
+	if err != nil {
+		return nil, err
+	}
+	harness, err := buildHarness(config.Client(), config.Models, config.Model)
+	if err != nil {
+		return nil, err
+	}
+	if c.Remember {
+		if loadErr != nil {
+			return harness, fmt.Errorf("connected, but not saved: %w", loadErr)
+		}
+		// Only a key typed or already saved is written: a key that came from
+		// the environment is never silently copied to disk.
+		if err := credentials.Save(path, saved.WithKey(c.Provider, c.Model, key)); err != nil {
+			return harness, fmt.Errorf("connected, but not saved: %w", err)
+		}
+	}
+	return harness, nil
 }
 
 func buildHarness(provider llm.Provider, models []string, model string) (*engine.Harness, error) {

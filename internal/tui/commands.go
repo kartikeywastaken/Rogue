@@ -16,6 +16,7 @@ type command struct {
 var commands = []command{
 	{"/help", "Show commands and keys"},
 	{"/model", "Choose the model"},
+	{"/provider", "Change provider, API key, or model"},
 	{"/mode", "Cycle mode: default · auto · plan"},
 	{"/clear", "Clear the transcript"},
 	{"/new", "Start a fresh session"},
@@ -68,6 +69,8 @@ func (m Model) runCommand(input string) (Model, tea.Cmd) {
 				m.pickIdx = i
 			}
 		}
+	case "/provider", "/login", "/setup":
+		return m, m.openSetup()
 	case "/mode":
 		m.mode = m.mode.Next()
 		m.notice("mode → " + m.mode.String())

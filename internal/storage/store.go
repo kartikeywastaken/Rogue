@@ -227,6 +227,25 @@ func (store *Store) Load(id string) (Checkpoint, error) {
 	return checkpoint, err
 }
 
+// Delete removes a saved mission checkpoint by ID. It returns an error if the
+// mission does not exist or the ID is invalid. Active in-memory runs are not
+// affected; they will fail to persist after their next checkpoint attempt.
+func (store *Store) Delete(id string) error {
+	if !validID.MatchString(id) {
+		return errors.New("invalid mission ID")
+	}
+	return store.locked(func() error {
+		path := filepath.Join(store.directory, id+".state")
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("mission %s not found", id)
+			}
+			return err
+		}
+		return nil
+	})
+}
+
 func validate(checkpoint Checkpoint) error {
 	id := checkpoint.Mission.ID
 	if checkpoint.Version != 1 || checkpoint.Evidence.MissionID != id || checkpoint.Comms.MissionID != id || checkpoint.Targets.MissionID != id {

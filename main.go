@@ -172,7 +172,7 @@ func run() error {
 
 	// ── provider check ───────────────────────────────────────────────────────
 	if *checkProvider {
-		config, err := llm.LoadConfig(os.Getenv)
+		config, err := loadProviderConfig()
 		if err != nil {
 			return err
 		}
@@ -213,9 +213,19 @@ func run() error {
 		if key == "" {
 			key = os.Getenv("ROGUE_API_KEY")
 		}
-		harness, err := buildHarness(nil, nil, "")
-		if err != nil {
-			return err
+		// Use buildEngine so the harness has a real LLM provider. If the
+		// environment is not configured, the server still starts but POST
+		// /api/v1/missions will return 503 (provider not configured).
+		var harness *engine.Harness
+		if backend, berr := buildEngine(); berr != nil {
+			fmt.Fprintf(os.Stderr, "rogue: warning: LLM provider not configured (%v) — POST /api/v1/missions will return 503\n", berr)
+			store2, serr := openStore()
+			if serr != nil {
+				return serr
+			}
+			harness = engine.NewHarnessWithOptions(nil, nil, nil, "", engine.Options{Store: store2})
+		} else {
+			harness = backend.(*engine.Harness)
 		}
 		store, err := openStore()
 		if err != nil {
@@ -229,10 +239,12 @@ func run() error {
 
 	// ── benchmark suite ──────────────────────────────────────────────────────
 	if *benchSuite != "" {
-		harness, err := buildHarness(nil, nil, "")
-		if err != nil {
-			return err
+		// Benchmarks require a real LLM provider; fail early with a clear error.
+		backend, berr := buildEngine()
+		if berr != nil {
+			return fmt.Errorf("benchmark requires a configured LLM provider: %w", berr)
 		}
+		harness := backend.(*engine.Harness)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		runner := bench.NewRunner(harness)
@@ -250,27 +262,48 @@ func run() error {
 			return fmt.Errorf("unknown benchmark suite %q; available: juice-shop, dvwa, webgoat, quick", *benchSuite)
 		}
 		result := runner.Run(ctx, suite)
+		var reportErr error
 		if *reportFormat == "markdown" {
-			_, err := fmt.Fprint(os.Stdout, bench.SuiteReport(result))
-			return err
+			_, reportErr = fmt.Fprint(os.Stdout, bench.SuiteReport(result))
+		} else {
+			data, merr := bench.SuiteReportJSON(result)
+			if merr != nil {
+				return merr
+			}
+			_, reportErr = os.Stdout.Write(data)
 		}
-		data, err := bench.SuiteReportJSON(result)
-		if err != nil {
-			return err
+		if reportErr != nil {
+			return reportErr
 		}
-		_, err = os.Stdout.Write(data)
-		return err
+		if result.Failed > 0 {
+			return fmt.Errorf("benchmark %s: %d/%d cases failed (score %.1f%%)",
+				*benchSuite, result.Failed, result.Passed+result.Failed, result.TotalScore*100)
+		}
+		return nil
 	}
 
 	// ── build engine and dispatch to TUI or headless assessment ─────────────
-	backend, err := buildEngine()
-	if err != nil {
-		return err
-	}
 	if *assessment != "" {
+		backend, err := buildEngine()
+		if err != nil {
+			return err
+		}
 		return runAssessment(backend.(*engine.Harness), *assessment, mode, *reportFormat)
 	}
-	_, err = tea.NewProgram(tui.New(backend)).Run()
+	// The TUI can collect a missing provider/key itself, so only a provider
+	// configuration error opens setup; any other startup error still exits.
+	setup := &tui.Setup{Options: setupOptions, Connect: connectProvider}
+	var backend engine.Engine
+	if config, err := loadProviderConfig(); err != nil {
+		setup.Reason = "no usable provider yet: " + err.Error()
+	} else {
+		harness, err := buildHarness(config.Client(), config.Models, config.Model)
+		if err != nil {
+			return err
+		}
+		backend = harness
+	}
+	_, err = tea.NewProgram(tui.NewWithSetup(backend, setup)).Run()
 	return err
 }
 

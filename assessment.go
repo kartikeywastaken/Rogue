@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"rogue/internal/engine"
+	"rogue/internal/plugin"
 )
 
 func assessmentMode(value string) (engine.Mode, error) {
@@ -32,17 +33,35 @@ func runAssessment(harness *engine.Harness, prompt string, mode engine.Mode, for
 	defer stop()
 	var failure error
 	done := false
+
+	// Fire mission start hook and count the attempt.
+	Metrics.Counter("missions_started").Inc()
+	_ = Plugins.FireHook(plugin.HookMissionStart, map[string]any{"prompt": prompt, "mode": mode.String()})
+
 	for event := range harness.Run(ctx, engine.Request{Prompt: prompt, Mode: mode}) {
 		switch event.Kind {
 		case engine.KindNotice:
 			fmt.Fprintln(os.Stderr, event.Text)
 		case engine.KindToolStart:
+			Metrics.Counter("tool_calls_started").Inc()
+			_ = Plugins.FireHook(plugin.HookToolBefore, map[string]any{"tool": event.Tool.Name, "id": event.Tool.ID})
 			fmt.Fprintf(os.Stderr, "tool started: %s [%s]\n", event.Tool.Name, event.Tool.ID)
 		case engine.KindToolEnd:
+			Metrics.Counter("tool_calls_finished").Inc()
+			if event.Tool.OK {
+				Metrics.Counter("tool_calls_succeeded").Inc()
+			} else {
+				Metrics.Counter("tool_calls_failed").Inc()
+			}
+			_ = Plugins.FireHook(plugin.HookToolAfter, map[string]any{"tool": event.Tool.Name, "ok": event.Tool.OK})
 			fmt.Fprintf(os.Stderr, "tool finished: %s success=%t %s\n", event.Tool.Name, event.Tool.OK, event.Tool.Output)
 		case engine.KindError:
+			Metrics.Counter("missions_failed").Inc()
+			_ = Plugins.FireHook(plugin.HookMissionAbort, map[string]any{"error": event.Err.Error()})
 			failure = errors.Join(failure, event.Err)
 		case engine.KindDone:
+			Metrics.Counter("missions_completed").Inc()
+			_ = Plugins.FireHook(plugin.HookMissionComplete, map[string]any{})
 			done = true
 		}
 	}

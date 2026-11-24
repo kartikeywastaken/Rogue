@@ -12,7 +12,6 @@ import (
 	"rogue/internal/arsenal"
 	"rogue/internal/engine"
 	"rogue/internal/export"
-	"rogue/internal/llm"
 	"rogue/internal/operator"
 	"rogue/internal/storage"
 	"rogue/internal/telemetry"
@@ -110,7 +109,7 @@ func runValidateConfig() error {
 	if _, err := loadOptions(); err != nil {
 		errs = append(errs, "options: "+err.Error())
 	}
-	if _, err := llm.LoadConfig(os.Getenv); err != nil {
+	if _, err := loadProviderConfig(); err != nil {
 		errs = append(errs, "provider: "+err.Error())
 	}
 	if _, err := openStore(); err != nil {

@@ -10,6 +10,32 @@ import (
 	"time"
 )
 
+// ProviderInfo describes a supported provider: where it lives and which
+// environment variable carries its credential (empty for keyless local servers).
+type ProviderInfo struct {
+	Name, Label, BaseURL, KeyEnv string
+	ModelHint                    string // where to find a model id; ids are never hardcoded defaults
+}
+
+// Providers is the single list of supported backends, in display order.
+var Providers = []ProviderInfo{
+	{Name: "openrouter", Label: "OpenRouter", BaseURL: "https://openrouter.ai/api/v1", KeyEnv: "OPENROUTER_API_KEY", ModelHint: "vendor/model id as listed at openrouter.ai/models"},
+	{Name: "anthropic", Label: "Anthropic", BaseURL: "https://api.anthropic.com/v1", KeyEnv: "ANTHROPIC_API_KEY", ModelHint: "model id from docs.anthropic.com, e.g. claude-sonnet-5-5"},
+	{Name: "openai", Label: "OpenAI", BaseURL: "https://api.openai.com/v1", KeyEnv: "OPENAI_API_KEY", ModelHint: "a tool-capable model id from platform.openai.com/docs/models"},
+	{Name: "groq", Label: "Groq", BaseURL: "https://api.groq.com/openai/v1", KeyEnv: "GROQ_API_KEY", ModelHint: "a tool-capable model id from console.groq.com/docs/models"},
+	{Name: "ollama", Label: "Ollama (local, no key)", BaseURL: "http://localhost:11434/v1", ModelHint: "a pulled model with tool support (see `ollama list`)"},
+}
+
+// LookupProvider finds a provider by name.
+func LookupProvider(name string) (ProviderInfo, bool) {
+	for _, p := range Providers {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return ProviderInfo{}, false
+}
+
 type Config struct {
 	Provider, Model, BaseURL, APIKey string
 	Models                           []string
@@ -25,26 +51,15 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if config.Provider == "" {
 		config.Provider = "openrouter"
 	}
-	var keyEnv string
-	switch config.Provider {
-	case "openrouter":
-		config.BaseURL = "https://openrouter.ai/api/v1"
-		keyEnv = "OPENROUTER_API_KEY"
-	case "openai":
-		config.BaseURL = "https://api.openai.com/v1"
-		keyEnv = "OPENAI_API_KEY"
-	case "groq":
-		config.BaseURL = "https://api.groq.com/openai/v1"
-		keyEnv = "GROQ_API_KEY"
-	case "anthropic":
-		config.BaseURL = "https://api.anthropic.com/v1"
-		keyEnv = "ANTHROPIC_API_KEY"
-	case "ollama", "local":
+	if config.Provider == "local" {
 		config.Provider = "ollama"
-		config.BaseURL = "http://localhost:11434/v1"
-	default:
+	}
+	info, ok := LookupProvider(config.Provider)
+	if !ok {
 		return config, fmt.Errorf("unsupported ROGUE_PROVIDER %q (use openrouter, openai, groq, anthropic, or ollama)", config.Provider)
 	}
+	config.BaseURL = info.BaseURL
+	keyEnv := info.KeyEnv
 	if keyEnv != "" {
 		config.APIKey = getenv(keyEnv)
 		if strings.TrimSpace(config.APIKey) == "" {
