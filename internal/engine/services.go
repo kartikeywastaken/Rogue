@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -17,6 +18,11 @@ import (
 
 func (harness *Harness) services(ctx context.Context, state *RunState, task mission.Task) context.Context {
 	return arsenal.WithServices(ctx, arsenal.Services{
+		Mission:func()any{return state.Control.Snapshot()},
+		Surface:func()any{return surfaceResearch(state)},
+		Chains:func()any{return chainResearch(state)},
+		ValidateEvidence:func(ids []string,assertion string)(any,error){return validateEvidence(state,ids,assertion)},
+		RunChild:func(operation context.Context,name string,args json.RawMessage)(*arsenal.Result,error){return harness.runChild(operation,state,task,name,args)},
 		Candidates: func() any { return target.CandidateMatches(state.Targets.Snapshot()) },
 		Evidence: func(ids []string) (any, error) {
 			items := make([]contextObservation, 0, len(ids))

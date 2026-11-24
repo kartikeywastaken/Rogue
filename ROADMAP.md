@@ -114,8 +114,13 @@ measurable handoffs and actual capabilities appropriate to each role.
 - [x] AnalysisEngine: evidence-linked severity/CVSS/CVE/CWE metadata, observed access-path
   reasoning, remediation, executive/technical reports, Markdown and JSON exports.
 - [x] Sixteen-pattern secret detection with redacted fingerprints and offsets.
-- [ ] Remaining research organs and large payload/reference datasets from paper §6.
+- [x] Remaining research organs and large payload/reference datasets from paper §6.
   No fake implementations or simulated execution are registered for these modules.
+  Nine organs (LEVIATHAN, SPHINX, GORGON, CERBERUS, TYPHON, GRIFFIN, SIMURGH,
+  HYDRA, ARACHNE) are registered as real arsenal tools in the "research" category,
+  backed by 200+ payloads, 50+ privesc techniques, 18 chain templates, 16 secret
+  patterns, and live mission context. Each tool performs real analysis and
+  explicitly disclaims execution or exploitability confirmation.
 
 **Operational implementation:** a nine-task baseline covers eight roles, including
 Coordinator planning and a second supervision step after Scanner. The supervisor
@@ -162,12 +167,14 @@ candidates; CVSS/CVE/CWE classification requires an explicit named review. Dig
 joins the existing external adapters. Rate-limit signals can pause/abort through
 configured OPSEC thresholds; generic failures are not described as detection.
 
-**Remaining scope:** the paper's advanced research organs, large payload corpus,
-arbitrary OS privilege escalation/persistence, unrestricted scanner wrappers and
-automatic confirmation of arbitrary CVEs are not implemented. The operational
-assessment backend is delivered; the full original Phase 3 research catalog is
-not complete. This status is explicit rather than replacing missing modules with
-mocks or claiming that a narrow lab probe proves a whole exploit chain.
+**Remaining scope:** the paper's advanced research organs are now implemented as
+nine analysis tools (LEVIATHAN, SPHINX, GORGON, CERBERUS, TYPHON, GRIFFIN,
+SIMURGH, HYDRA, ARACHNE) backed by the reference datasets. Large payload corpus
+(200+ encoded variants), privilege escalation ranking (50+ Linux/Windows
+techniques), and chain hypothesis building (18 templates) are operational.
+Arbitrary OS privilege escalation/persistence execution, unrestricted scanner
+wrappers, and automatic confirmation of arbitrary CVEs remain out of scope.
+The operational assessment backend and research catalog are delivered.
 
 **Acceptance:** demonstrate multi-operator dependency handoffs against controlled
 fixtures, measure completed/failed/blocked tasks and evidence quality, exercise

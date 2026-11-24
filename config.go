@@ -24,6 +24,7 @@ func newRegistry() *arsenal.Registry {
 	arsenal.RegisterIntelligenceTools(registry)
 	arsenal.RegisterExternalTools(registry, arsenal.ExternalOptions{NmapPath: os.Getenv("ROGUE_NMAP_PATH"), CurlPath: os.Getenv("ROGUE_CURL_PATH"), DigPath: os.Getenv("ROGUE_DIG_PATH")})
 	arsenal.RegisterCVETool(registry, &arsenal.CVEClient{APIKey: os.Getenv("NVD_API_KEY")})
+	arsenal.RegisterResearchTools(registry)
 	return registry
 }
 

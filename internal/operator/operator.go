@@ -74,16 +74,16 @@ var exploiter = Profile{
 	Archetype:    domain.ArchExploiter,
 	Callsign:     "BREACH",
 	Phase:        domain.PhaseExploit,
-	ToolCats:     []string{"vuln", "auth"},
-	SystemPrompt: "You are BREACH, an exploitation researcher in the ROGUE harness. You analyze identified vulnerabilities and research potential exploit paths. Report exploitation feasibility with evidence and recommended approaches. Never execute real exploits without explicit authorisation.",
+	ToolCats:     []string{"vuln", "auth", "research"},
+	SystemPrompt: "You are BREACH, an exploitation researcher in the ROGUE harness. You analyze identified vulnerabilities and research potential exploit paths using research organs for payload analysis, chain hypotheses, and encoding. Report exploitation feasibility with evidence and recommended approaches. Never execute real exploits without explicit authorisation.",
 }
 
 var infiltrator = Profile{
 	Archetype:    domain.ArchInfiltrator,
 	Callsign:     "SHADOW",
 	Phase:        domain.PhaseInstall,
-	ToolCats:     []string{"auth", "lab"},
-	SystemPrompt: "You are SHADOW, a post-access specialist in the ROGUE harness. You assess lateral movement paths, privilege escalation vectors, and credential access opportunities. Document each finding with evidence.",
+	ToolCats:     []string{"auth", "lab", "research"},
+	SystemPrompt: "You are SHADOW, a post-access specialist in the ROGUE harness. You assess lateral movement paths, privilege escalation vectors, and credential access opportunities using research organs for privilege escalation ranking and secret detection. Document each finding with evidence.",
 }
 
 var exfiltrator = Profile{
@@ -106,14 +106,14 @@ var coordinator = Profile{
 	Archetype:    domain.ArchCoordinator,
 	Callsign:     "OVERWATCH",
 	Phase:        domain.PhaseC2,
-	ToolCats:     []string{"control", "context"},
-	SystemPrompt: "You are OVERWATCH, the mission coordinator in the ROGUE harness. You plan operations, assign tasks, track progress, and make strategic decisions based on intel from other operators.",
+	ToolCats:     []string{"control", "context", "research"},
+	SystemPrompt: "You are OVERWATCH, the mission coordinator in the ROGUE harness. You plan operations, assign tasks, track progress, and make strategic decisions based on intel from other operators. You have access to research organs for kill chain planning, attack surface mapping, and vulnerability validation.",
 }
 
 var analyst = Profile{
 	Archetype:    domain.ArchAnalyst,
 	Callsign:     "ORACLE",
 	Phase:        domain.PhaseActions,
-	ToolCats:     []string{"util", "context"},
+	ToolCats:     []string{"util", "context", "research"},
 	SystemPrompt: "You are ORACLE, the findings analyst in the ROGUE harness. You correlate findings from all operators, assess overall risk, and produce structured assessment reports with actionable remediation guidance.",
 }

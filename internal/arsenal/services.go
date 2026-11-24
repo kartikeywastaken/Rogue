@@ -17,6 +17,11 @@ type Services struct {
 	Propose    func(TaskProposal) (any, error)
 	Credential func(string, string) (string, error)
 	Candidates func() any
+	Mission func()any
+	Surface func()any
+	Chains func()any
+	ValidateEvidence func([]string,string)(any,error)
+	RunChild func(context.Context,string,json.RawMessage)(*Result,error)
 }
 type servicesKey struct{}
 
