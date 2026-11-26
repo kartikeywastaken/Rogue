@@ -25,9 +25,15 @@ func (m Model) View() tea.View {
 		body = m.viewSetup()
 	case phaseLanding:
 		body = m.viewLanding()
+	case phaseWarRoom:
+		v.MouseMode = tea.MouseModeCellMotion
+		body = m.viewWarRoom()
 	default:
 		v.MouseMode = tea.MouseModeCellMotion
 		body = m.viewSession()
+	}
+	if len(m.war.approvals) > 0 {
+		body = m.viewApproval()
 	}
 	v.SetContent(clip(body, m.width, m.height))
 	return v
@@ -204,6 +210,9 @@ func (m Model) renderTranscript(w int) string {
 
 // waiting reports whether the turn is running with nothing visibly streaming.
 func (m Model) waiting() bool {
+	if len(m.entries) == 0 {
+		return true
+	}
 	last := m.entries[len(m.entries)-1]
 	switch last.kind {
 	case entAssistant:

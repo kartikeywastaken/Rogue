@@ -1,171 +1,360 @@
 ROGUE Implementation Split & 4-Phase Plan (w.txt)
 TUI-Oriented War Room Deferred to Phase 4 (Last)
+Updated: 2026-11-27 (synced against branch `imp` @ commit c407754, 79 tools)
+
+================================================================================
+CURRENT STATUS SUMMARY
+================================================================================
+CLAUDE side:
+  - Phase 1 [DONE]: research.go scope/approval/cerberus fixes, Inspector &
+    WarRoomSnapshot seam (internal/engine/inspector.go), priority CLI wrappers.
+  - Phase 2 [DONE]: all external CLI wrappers (dirb, ffuf, gobuster, wfuzz,
+    nikto, sqlmap, hydra, host, whois_cli, wget, openssl, xxd, strings, file,
+    exiftool, binwalk, crypto_hash, plus nuclei_scan w/ JSONL -> domain.Finding),
+    TLS cipher/protocol enum, same-origin crawler, remote SSH cerberus_privesc,
+    non-loopback active exploitation pipelines & sandbox/Docker exploit PoCs
+    (internal/sandbox/, exploit_tools.go, sandbox_tools.go, ctf_tools.go),
+    OPSEC/RoE presets (internal/opsec/presets.go), team factories & dynamic
+    cell auto-spawning (internal/operator/teams.go, cell.go).
+  - Phase 3 [DONE]: white-box analyzer (internal/whitebox/ + API route),
+    cloud posture (internal/cloud/), ELF/PE/Mach-O/crypto/Solidity modules
+    (internal/arsenal/multidomain.go), Cybench/NYU/XBOW/local-ctf/categories
+    benchmarks (internal/bench/ctf.go, ctf/challenges/), ToT backtracking &
+    AI red-teaming (internal/agent/cognition.go, ai_redteam.go).
+  - Phase 4 [PARTIAL]: TUI run-scoped approval callback is implemented in
+    internal/engine/interactive.go; WS approval transport remains. Env wiring in config.go
+    (ROGUE_OPSEC_PROFILE, ROGUE_ROE_PRESET, ROGUE_TEAM, ROGUE_BACKTRACK),
+    and final end-to-end verification after Codex finishes Phases 1-4.
+
+CODEX side:
+  - Phase 1 [TODO]: Keyless coding-agent providers (claude-code, codex, hermes)
+    and Metrics/Plugins hook parity in --serve and --mcp; TUI hooks are done.
+  - Phase 2 [PARTIAL]: PDF exporter is implemented for TUI report downloads;
+    CLI/API format wiring, WebSocket live
+    stream (internal/api/), and TypeScript SDK (sdk/).
+  - Phase 3 [TODO — PARTIAL]: `GET /api/v1/missions/{id}/inspect` and
+    `POST /api/v1/whitebox/analyze` already exist in internal/api/server.go;
+    ALL other Phase 3 HTTP API, MCP, and SDK bindings are still TODO.
+  - Phase 4 [DONE]: TUI War Room (/warroom, ctrl+w, 6 panels, approval modal),
+    matching the existing theme; see completion notes in the Phase 4 section.
 
 ================================================================================
 OWNERSHIP BOUNDARY (CLEAN INTERFACE TO AVOID CONFLICTS)
 ================================================================================
 CODEX owns:
   - Keyless coding-agent model backends (internal/llm/: claude-code, codex CLI,
-    hermes fallback, /provider setup & --check-provider support, /api/codex/*)
-  - Ecosystem & transports (internal/export/ PDF, internal/api/ WebSockets,
-    TypeScript SDK, Metrics/Plugins hook wiring in --serve / --mcp / TUI)
-  - User Interface & TUI War Room (internal/tui/: built in Phase 4 once all
-    backend data, presets, benchmarks, and exports are ready)
+    hermes fallback, /provider TUI setup & --check-provider support,
+    /api/codex/status & /api/codex/probe)
+  - Ecosystem & transports (internal/export/ PDF, internal/api/ WebSockets &
+    missing Phase 3 routes, internal/mcp/ Phase 3 resources/tools, sdk/
+    TypeScript SDK, Metrics/Plugins wiring in --serve / --mcp / TUI)
+  - User Interface & TUI War Room (internal/tui/: /warroom shell, 6 inspector
+    panels, interactive approval modal on top of internal/engine/ seams)
 
 CLAUDE owns:
-  - Security hardening & core engine seam (internal/arsenal/research.go scope
-    fixes, internal/engine/ Inspector/WarRoomSnapshot interface)
-  - External security CLI wrappers & active scanners (internal/arsenal/)
-  - OPSEC evasion, team factories, dynamic scaling & cognition (internal/opsec/,
-    internal/operator/, internal/agent/, internal/engine/)
-  - Multi-domain modules & benchmarks (internal/whitebox/, internal/cloud/,
-    binary/crypto/smart-contract helpers, internal/bench/)
+  - Core engine & security/arsenal runtime (internal/arsenal/, internal/sandbox/,
+    internal/opsec/, internal/operator/, internal/agent/, internal/engine/)
+  - Multi-domain scanners & benchmarks (internal/whitebox/, internal/cloud/,
+    internal/bench/)
+  - Phase 4 Engine ApprovalController seam & final e2e verification
 
-SHARED SEAM (internal/engine/):
-  - Read-only Inspector / WarRoomSnapshot interface exposed by Harness in
-    Phase 1. Claude populates mission phase, 8 operator states/risks, task DAG,
-    target tree, findings/evidence, OPSEC counters, approvals, and budget;
-    Codex consumes it in the Phase 4 TUI War Room without breaking engine.Engine.
-
-================================================================================
-PHASE 1 — FOUNDATION, HARDENING & KEYLESS CODING-AGENT MODELS
-================================================================================
-Goal: Fix scope-escape risks in research.go, add Claude Code / Codex as keyless
-LLM backends, wire telemetry/plugin parity, and wrap high-priority CLI scanners.
-
-[CLAUDE]
-  1. Research Organ Security Hardening (internal/arsenal/research.go):
-     - Wire checkURL(ctx, ...) and redirect-target scope validation into
-       probeGET and probePOST so execute=true strictly obeys ROGUE_SCOPE,
-       ROGUE_EXCLUDED, and ROGUE_ALLOWED_PORTS.
-     - Gate execute=true through Policy.Approve when running in default mode.
-     - Fix cerberus_privesc local checks: use `sudo -n -l` (non-interactive) and
-       tolerate partial stdout from `find` when unreadable paths return err != 0.
-  2. Engine Inspection Seam (internal/engine/):
-     - Define optional Inspector interface + WarRoomSnapshot struct (tasks,
-       kill-chain phase status, 8 operator states/risks, target inventory,
-       findings, OPSEC signals, budget/metrics).
-  3. Priority External CLI Wrappers (internal/arsenal/):
-     - Wrap ffuf, gobuster, nikto, sqlmap, openssl, wget, and host using
-       ProcessRunner (stripped env, explicit allowlisted flags, 2 MiB caps).
-
-[CODEX]
-  1. Keyless Coding-Agent Providers (internal/llm/ + internal/tui/setup.go):
-     - Add `claude-code` (claude -p stream-json) and `codex` (codex exec JSON)
-       implementing llm.Provider so ROGUE can run using local authenticated
-       coding-agent sessions with no separate LLM API key.
-     - Add Hermes / fallback chain wiring matching T3MP3ST's resilient calls.
-     - Register providers in llm.Providers, update /provider TUI setup,
-       --check-provider, and add GET /api/codex/status & POST /api/codex/probe
-       in internal/api/.
-  2. Telemetry & Plugin Hook Parity (cli.go, internal/api/, internal/mcp/):
-     - Pass Metrics (telemetry.Collector) and Plugins (plugin.Registry) into
-       --serve, --mcp, and TUI execution paths so lifecycle hooks and counters
-       fire consistently across all modes, not just --assess.
+SHARED SEAMS ALREADY IN PLACE (DO NOT BREAK):
+  - core engine interface: internal/engine/engine.go (`Engine`, `Event`, `Mode`)
+  - War Room read seam: internal/engine/inspector.go (`Inspector` interface
+    with `Inspect(id) (WarRoomSnapshot, error)` & `LiveSnapshot()`)
+    -> Already populated with Phase, Phases, Progress, Tasks, Operators,
+       Targets, Findings, ObservationsCount, PendingApprovals, OPSEC,
+       OPSECProfile, RoEPreset, Detections, Spending, Messages.
+  - Live mission control: internal/engine/state.go & approval.go
+    (`ApproveTool(id, tool, args, expires)`, `PauseMission(id)`,
+     `ResumeMission(id)`, `AbortMission(id, reason)`, `RecordDetection(...)`)
+  - Shared singletons: `Metrics` (*telemetry.Collector) & `Plugins`
+    (*plugin.Registry) in config.go; built-in `teams` in internal/operator/
+    teams.go; `opsec` presets in internal/opsec/presets.go; `bench` suites in
+    internal/bench/; `export` helpers in internal/export/export.go.
 
 ================================================================================
-PHASE 2 — ACTIVE SCANNING, OPSEC EVASION & ECOSYSTEM EXPORTS
+WHAT IS LEFT FOR CODEX — EXACT UPDATE CHECKLIST
 ================================================================================
-Goal: Complete CLI/scanner arsenal, OPSEC evasion mechanics, dynamic operator
-scaling, and external ecosystem exports (PDF, WebSockets, TypeScript SDK).
 
-[CLAUDE]
-  1. Remaining External CLI Wrappers (internal/arsenal/):
-     - Add dirb, wfuzz, hydra (lab/explicit-auth gated), whois CLI option, plus
-       binary/forensics tools: xxd, strings, file, exiftool, binwalk.
-  2. Active Scanning & Remote Privesc (internal/arsenal/):
-     - Full TLS cipher/protocol suite enumeration (weak ciphers/old TLS).
-     - Recursive same-origin crawler & form/parameter extractor.
-     - Authorized non-loopback active scanners (beyond 1-endpoint lab checks
-       when explicit scope + approval policy allow).
-     - Remote SSH/session transport option for cerberus_privesc so privilege
-       escalation checks can inspect targets instead of only the ROGUE host.
-  3. OPSEC Evasion & Operator Scaling (internal/opsec/, internal/operator/):
-     - Implement named OPSEC presets (`Silent`, `Covert`, `Loud`) and RoE
-       presets (`StrictRoE`, `DefaultRoE`).
-     - Add randomized HTTP jitter, User-Agent rotation, and traffic blending.
-     - Implement team factories (`Balanced`, `Stealth`, `Breach`) and dynamic
-       operator auto-spawning (up to N per archetype under queue load).
+--------------------------------------------------------------------------------
+[CODEX — PHASE 1] KEYLESS CODING-AGENT PROVIDERS & HOOK PARITY (TODO)
+--------------------------------------------------------------------------------
+1. Keyless Coding-Agent LLM Backends:
+   Files to create/update:
+     - internal/llm/cli_provider.go (new): implement `llm.Provider` (`ChatStream`)
+       wrapping local authenticated CLIs with bounded subprocess execution
+       (stripped sensitive API env unless needed by CLI, context cancellation,
+       bounded buffers):
+       a) `claude-code`: invoke `claude -p --output-format stream-json ...`,
+          translate `[]llm.Message` (system/user/assistant/tool) & `[]llm.ToolDef`
+          into prompt/tool instructions, and parse NDJSON output into
+          `llm.StreamDelta` (text + validated `ToolCall`s + `Usage` + `Done`).
+       b) `codex`: invoke `codex exec --json ...`, map NDJSON events into
+          `llm.StreamDelta`.
+       c) `hermes`: implement/wire resilient provider-level fallback chain
+          alongside `llm.Fallback` in internal/llm/resilience.go (so model AND
+          provider/CLI failover work cleanly on transient/quota errors).
+     - internal/llm/config.go:
+       * Add `CLI bool` (or equivalent flag) + `Binary string` to `ProviderInfo`
+         and register `claude-code`, `codex`, `hermes` in `Providers` + aliases.
+       * Update `LoadEndpoint()` so CLI/keyless providers do NOT require an API
+         key or HTTPS `BaseURL` (fix `TestEveryProviderLoads` assumptions in
+         internal/llm/providers_test.go so HTTP and CLI providers both pass!).
+       * Update `RawClient()` / `Client()` to construct the CLI provider client.
+     - internal/llm/models.go:
+       * Update `ListModels()` so CLI providers return supported local model
+         choices / CLI status cleanly instead of making an HTTP GET `/models`
+         call against an empty `BaseURL`.
+     - internal/llm/probe.go & main.go (`--check-provider`):
+       * Verify `llm.Probe()` works cleanly against `claude-code` / `codex`
+         tool-calling emulation/output.
+     - internal/tui/setup.go & config.go (`setupOptions`, `resolveSetup`,
+       `listModels`, `connectProvider`):
+       * Update `ProviderChoice` / `setupState` so keyless CLI providers skip
+         `stepURL` and `stepKey` cleanly and show binary availability in `/provider`.
+     - internal/api/server.go:
+       * Add `GET /api/codex/status` (and alias `/api/v1/codex/status`): inspect
+         installed local coding-agent CLIs (`claude`, `codex`, `hermes`), auth/
+         executability status, and active configured provider.
+       * Add `POST /api/codex/probe` (and `/api/v1/codex/probe`): run a bounded
+         harmless echo `llm.Probe` on the requested CLI provider.
 
-[CODEX]
-  1. PDF Report Export (internal/export/):
-     - Add PDF generator for `--report-format pdf` and API report downloads.
-  2. WebSocket Live Stream (internal/api/):
-     - Add WebSocket endpoint alongside SSE for real-time bidirectional events.
-  3. TypeScript SDK (sdk/):
-     - Build typed TypeScript SDK wrapping `--serve` REST + SSE/WebSocket APIs
-       (missions, targets, findings, tools, approvals, report exports).
+2. Metrics & Plugin Hook Parity Across All Entrypoints:
+   Files to update:
+     - Currently ONLY assessment.go wires `Metrics` and `Plugins` (config.go).
+       `api.New`, `mcp.New`, and `tui.NewWithSetup` do not receive or use them.
+     - config.go / main.go: pass `Metrics` (*telemetry.Collector) and `Plugins`
+       (*plugin.Registry) into:
+       a) internal/api/server.go (`api.New` or options/setters):
+          - Fire `HookMissionStart`, `HookMissionComplete`, `HookMissionAbort`
+            inside the mission runner goroutine in `handleStartMission`.
+          - Fire `HookToolBefore`, `HookToolAfter` and increment
+            `missions_started`, `missions_completed`, `missions_failed`,
+            `tool_calls_started`, `tool_calls_finished`, `tool_calls_succeeded`,
+            `tool_calls_failed` for both mission SSE events and
+            `POST /api/v1/tools/{name}/exec`.
+          - Add `GET /api/v1/metrics` -> `Metrics.Snapshot()`.
+          - Add `GET /api/v1/plugins` -> list registered plugins & enabled state,
+            plus `POST /api/v1/plugins/{name}/enable` & `/disable`.
+       b) internal/mcp/server.go (`mcp.New` or options):
+          - Increment `tool_calls_*` counters and fire `HookToolBefore` /
+            `HookToolAfter` inside `tools/call`.
+       c) internal/tui/model.go (optional `Telemetry`/`Hooks` callback or
+          struct passed from `main.go`):
+          - Fire matching mission & tool counters/hooks during TUI turns so TUI,
+            `--assess`, `--serve`, and `--mcp` report identical telemetry.
 
-================================================================================
-PHASE 3 — MULTI-DOMAIN MODULES, BENCHMARKS & ADVANCED COGNITION
-================================================================================
-Goal: Expand into white-box, cloud, and binary/RE/smart-contract domains; ship
-Cybench/NYU/XBOW benchmark integrations; expose APIs ready for the War Room.
+--------------------------------------------------------------------------------
+[CODEX — PHASE 2] PDF EXPORT, WEBSOCKETS & TYPESCRIPT SDK (TODO)
+--------------------------------------------------------------------------------
+1. PDF Report Export:
+   Files to update:
+     - internal/export/export.go:
+       * Add `ExportPDF(report engine.Report) ([]byte, error)` returning valid
+         PDF 1.4+ bytes (keep zero external heavy deps like Chromium; stdlib
+         PDF page/stream generation with `compress/zlib` is preferred so
+         `go.mod` remains minimal and cross-platform). Include executive
+         summary, severity distribution, findings table/cards (CWE/CVSS/CVE/
+         remediation), observation index, spending, and limitations.
+     - main.go:
+       * Add `"pdf"` to `--report-format` validation and flag help text
+         (`json, markdown, sarif, csv, html, pdf`).
+     - cli.go & assessment.go:
+       * Add `case "pdf": data, err = export.ExportPDF(report)` in
+         `exportReport()`.
+       * Also unify `--assess` (`assessment.go`), `--tool` (`main.go`), and
+         `--merge-reports` (`cli.go`) so format flags don't silently drop
+         non-markdown/json formats, and remove unused `runExportMission` in
+         cli.go (or route through `exportReport`).
+     - internal/api/server.go (`handleMissionReport`):
+       * Currently `GET /api/v1/missions/{id}/report` ONLY checks `?format=markdown`
+         vs JSON! Update it to support `json`, `markdown`, `sarif`, `csv`,
+         `html`, and `pdf` with proper `Content-Type` headers
+         (`application/pdf`, `application/sarif+json`, `text/csv`, `text/html`,
+         `text/markdown`, `application/json`) and `Content-Disposition` for file
+         downloads.
 
-[CLAUDE]
-  1. White-Box Repository Analyzer (internal/whitebox/ + internal/api/):
-     - Repo ingestion, file/dependency decomposition, SAST rules + secret_scan
-       correlation, exposed as an arsenal tool and `POST /api/v1/whitebox/analyze`.
-  2. Cloud & Multi-Domain Security Modules (internal/cloud/, internal/arsenal/):
-     - Scoped AWS/GCP/Azure read-only posture checks (IAM, storage, metadata).
-     - Static binary triage (ELF/PE/Mach-O), crypto helpers, and Solidity /
-       smart-contract security pattern auditing tools.
-  3. Benchmark & CTF Suite Expansion (internal/bench/):
-     - Implement Cybench (40 tasks), NYU CTF Bench (200 tasks), and XBOW/XBEN
-       adapters plus local fixture challenges (ctf/challenges/).
-     - Cover missing categories: binary, crypto, reverse, forensics,
-       autonomous_ops, and OWASP/MITRE/CWE matrices.
-     - Implement exact flag matching + hybrid keyword/LLM-judge partial scoring.
-  4. Advanced Cognition & AI Red-Teaming (internal/agent/, internal/engine/):
-     - Multi-branch backtracking / Tree-of-Thought recovery on failed paths.
-     - AI/LLM target red-teaming module (refusal suppression, encoding evasion).
+2. WebSocket Live Stream:
+   Files to update:
+     - internal/api/server.go & internal/api/server_test.go:
+       * Add `GET /api/v1/missions/{id}/ws` alongside existing SSE
+         `GET /api/v1/missions/{id}/events` (protected by `requireAuth`).
+       * Implement stdlib RFC 6455 WebSocket handshake (`Upgrade: websocket`,
+         `Sec-WebSocket-Accept` SHA-1 key digest, HTTP `Hijacker`) + frame
+         reader/writer (text frames, ping/pong, close frames) — zero new
+         external dependencies needed, or update `go.mod` only if strictly
+         justified.
+       * On connect: send initial `snapshot` (`Inspect(id)`), then forward
+         live `eventBus` events (`text`, `tool_start`, `tool_end`, `usage`,
+         `notice`, `error`, `done`, plus approval requests once Claude adds
+         the Phase 4 approval stream event).
+       * Handle incoming client JSON commands: `pause`, `resume`, `abort`,
+         `approve` (`Harness.ApproveTool`), `deny`, validating auth & payload.
 
-[CODEX]
-  1. API, MCP & SDK Bindings for Phase 3 Capabilities:
-     - Expose white-box analysis, benchmark runs/results, OPSEC presets, and
-       team factories across `--serve`, `--mcp`, and the TypeScript SDK so all
-       data surfaces are unified before building the War Room UI.
+3. TypeScript SDK (`sdk/`):
+   Files to create:
+     - `sdk/package.json`, `sdk/tsconfig.json`, `sdk/src/index.ts`,
+       `sdk/src/client.ts`, `sdk/src/types.ts`, `sdk/src/stream.ts` (plus unit/
+       contract tests):
+       * Typed TypeScript client targeting `--serve` REST + SSE + WebSocket:
+         - Health, config, metrics, plugins (`health()`, `config()`, `metrics()`,
+           `plugins()`, `enablePlugin()`, `disablePlugin()`)
+         - Providers & keyless CLIs (`providerStatus()`, `codexStatus()`,
+           `codexProbe()`)
+         - Missions (`listMissions()`, `startMission()`, `getMission()`,
+           `deleteMission()`, `pauseMission()`, `resumeMission()`,
+           `abortMission()`, `inspectMission()`, `approveTool()`)
+         - Reports (`getReport(id, format: 'json'|'markdown'|'sarif'|'csv'|'html'|'pdf')`)
+         - Live streams (`streamMissionSSE()`, `connectMissionWS()`)
+         - Tools & operators (`listTools()`, `getTool()`, `execTool()`,
+           `listOperators()`)
+         - Phase 3 bindings (whitebox, benchmarks, OPSEC/RoE presets, teams).
 
-================================================================================
-PHASE 4 — TUI-ORIENTED WAR ROOM (ADDED LAST)
-================================================================================
-Goal: Build the War Room natively inside ROGUE's Bubble Tea v2 TUI on top of
-the completed Phase 1-3 engine, Inspector seam, OPSEC presets, and benchmarks.
+--------------------------------------------------------------------------------
+[CODEX — PHASE 3] API, MCP & SDK BINDINGS FOR PHASE 3 (PARTIAL -> COMPLETE)
+--------------------------------------------------------------------------------
+Already in `internal/api/server.go`:
+  - `GET /api/v1/missions/{id}/inspect` (returns `engine.WarRoomSnapshot`)
+  - `POST /api/v1/whitebox/analyze` (calls `whitebox.Analyze`)
 
-[CODEX]
-  1. War Room Shell & Adaptive Layout (internal/tui/):
-     - Add `/warroom` command and `ctrl+w` toggle (plus `esc` back to chat)
-       without interrupting running turns; stay faithful to theme.go's dark
-       wine-plum (#130911) foreground-only palette.
-     - Wide terminals (width >= 120): Split layout — Left (58%) 7-stage Kill
-       Chain stepper + live ops/transcript feed + input box; Right (42%)
-       tabbed inspector pane.
-     - Standard terminals (80-119 cols): Full-screen tabbed view with a 2-line
-       persistent telemetry bar (mission ID/status, phase stepper, mode, OPSEC
-       meter, token/USD budget).
-  2. Six TUI War Room Panels (`1`-`6` tabs):
-     - [1] Ops / Kill Chain: Phase stepper (`RECON -> WEAPONIZE -> DELIVER ->
-       EXPLOIT -> INSTALL -> C2 -> ACTIONS`), streamed operator-tagged events,
-       `enter` to inspect full tool JSON/output in a pager.
-     - [2] Operators: 8-archetype roster (`Callsign | State | Done/Fail | Risk`
-       bar) + `j/k` bottom Dossier Drawer (MITRE tactics, ToolCats, task).
-     - [3] Targets: Collapsible tree (`Host -> Port/Proto -> Service/CPE ->
-       Candidate CVEs -> Findings`), severity-colored.
-     - [4] Vault: Findings table filterable by severity (`c/h/m/l/i`), `enter`
-       for CVSS v3.1 vector & access path, `e` to export JSON/SARIF/HTML/MD/PDF.
-     - [5] Arsenal: Live tool catalog (`nmap [ok] / sqlmap [missing]`), scope/lab
-       badges, and inline quick-run modal.
-     - [6] OPSEC & Bench: Preset switcher (`Silent`/`Covert`/`Loud`,
-       `Balanced`/`Stealth`/`Breach`), IOC log, detection meter, and live
-       Cybench/NYU/JuiceShop benchmark scoreboard.
-  3. Interactive Approval Modal (TUI-Native Killer Feature):
-     - When `mode == default` and a tool requires approval, show a centered
-       approval card with exact tool, target, and arguments:
-       `[y] allow once  [a] allow for mission  [n] deny`.
+Still TODO for Codex across HTTP API, MCP, and SDK:
+1. HTTP API Additions (internal/api/server.go & server_test.go):
+   - Benchmarks:
+     * `GET /api/v1/benchmarks` -> list available suites (`juice-shop`, `dvwa`,
+       `webgoat`, `quick`, `cybench`, `nyu-ctf`, `xbow`, `local-ctf`,
+       `categories`).
+     * `POST /api/v1/benchmarks/run` -> start async or bounded run via
+       `bench.NewRunner(s.harness)` returning a benchmark run ID.
+     * `GET /api/v1/benchmarks/{id}` -> inspect progress/final `bench.SuiteResult`.
+   - OPSEC & RoE Presets:
+     * `GET /api/v1/opsec` -> return `opsec.ActiveProfileSnapshot()`,
+       `opsec.ActiveRoESnapshot()`, `opsec.Profiles()`, `opsec.RoEPresets()`.
+     * `POST /api/v1/opsec` -> switch active profile (`opsec.SetProfile`) and/or
+       RoE preset (`opsec.SetRoE`) cleanly.
+   - Team Factories & Mission Options:
+     * `GET /api/v1/teams` -> return `operator.AvailableTeams()`.
+     * Extend `POST /api/v1/missions` request body to optionally accept `team`,
+       `opsec_profile`, `roe_preset`, `backtrack` (applying validated presets /
+       forwarding to harness request/options cleanly).
+   - Interactive Approvals & Imports:
+     * `POST /api/v1/missions/{id}/approve` -> grant exact-action approval via
+       `s.harness.ApproveTool(...)` for API/WebSocket/SDK clients.
+     * `POST /api/v1/import/nmap` & `POST /api/v1/import/nuclei` -> expose
+       `export.ImportNmapXML` & `export.ImportNucleiJSON` (currently unwired).
 
-[CLAUDE]
-  1. Engine <-> TUI Interactive Hooks & Final Verification:
-     - Wire real-time interactive ApprovalController callback channel from
-       Harness into the TUI event stream (and pause/resume control on `space`).
-     - Run end-to-end verification across TUI War Room, CLI, `--serve`, `--mcp`,
-       and benchmark suites.
+2. MCP Server Parity (internal/mcp/server.go):
+   - Add MCP resources:
+     * `rogue://metrics` -> `Metrics.Snapshot()` JSON
+     * `rogue://plugins` -> registered plugins JSON
+     * `rogue://opsec` -> OPSEC profiles, RoE presets, and active snapshot
+     * `rogue://teams` -> `operator.AvailableTeams()` JSON
+     * `rogue://benchmarks` -> available suites metadata
+     * `rogue://missions/{id}/inspect` -> `s.harness.Inspect(id)` (`WarRoomSnapshot`)
+   - Add MCP control/analysis tools (or virtual meta-tools alongside `s.registry`):
+     * `whitebox_analyze` (already in arsenal too — ensure parity),
+       `opsec_set_profile`, `benchmark_list` / `benchmark_run`, `mission_inspect`.
+   - Check `s.harness != nil` safely on `rogue://missions/*` reads.
+
+3. Update TypeScript SDK (`sdk/`) for every endpoint above.
+
+--------------------------------------------------------------------------------
+[CODEX — PHASE 4] TUI-ORIENTED WAR ROOM (`internal/tui/`) (DONE)
+--------------------------------------------------------------------------------
+Implemented 2026-11-27 on top of the existing landing/session TUI:
+  - internal/tui/warroom.go + warroom_view.go: asynchronous Inspector polling,
+    adaptive split/tabbed layouts, all six panels, tool/finding pagers, target
+    collapse, severity/catalog filters, and keyboard-only forms.
+  - tui_services.go: injected catalog/quick-run/export/preset/benchmark callbacks
+    and ordered mission/tool Metrics + Plugins hooks. Benchmark progress updates
+    return through Bubble Tea messages; presets rebuild idle engines.
+  - internal/engine/interactive.go: opt-in WithApprovalHandler context seam;
+    once/mission grants remain bound to the exact actionKey. Cancellation drops
+    pending requests. engine.Engine and headless approval behavior are unchanged.
+  - internal/engine/trace.go: full recorded tool JSON for the local pager,
+    retaining sensitive argument redactions. Public reports retain their existing
+    payload redactions.
+  - internal/export/pdf.go: dependency-free paginated PDF export; TUI export
+    supports JSON, SARIF, HTML, Markdown and PDF with a destination picker.
+  - Existing #130911 ground, foreground-only theme, landing, and session remain.
+    Only selected rows use #2E1428; Esc exits overlays/War Room without cancelling
+    the turn. i (or :) focuses mission input; Vault reserves i for info severity.
+  - Validation: go build ./..., go vet ./..., and go test -count=1 -race ./...
+    passed. Layouts checked at 28x10 through 200x50, all tabs/overlays, with
+    deterministic terminal previews and rendered multi-page PDF verification.
+
+The Phase 1 keyless provider backends/setup, API/MCP/SDK work, CLI/API PDF format
+wiring, WebSocket approval transport and preset env wiring remain separate tasks.
+
+Prerequisites/Seams:
+  - Read `WarRoomSnapshot` via optional type assertion:
+    `if insp, ok := m.eng.(engine.Inspector); ok { ... }`
+    so `engine.Engine` remains small and clean (`internal/tui/model.go`).
+  - Keep strict visual fidelity to `internal/tui/theme.go`:
+    * `colGround = #130911` set once on `tea.View.BackgroundColor`
+    * Foreground-only styles everywhere else (only selected list rows fill
+      `colSelected = #2E1428`).
+
+1. War Room Shell & Adaptive Layout (`commands.go`, `model.go`, `view.go`,
+   new `warroom.go`):
+   - Add `/warroom` to `commands` in `internal/tui/commands.go` and bind `ctrl+w`
+     in `onKey` to toggle War Room (`phaseWarRoom`), plus `esc` to close overlays
+     or return to `phaseSession` without stopping active background turns.
+   - Poll/refresh `LiveSnapshot()` on turn ticks / events (`eventMsg`) without
+     blocking the Bubble Tea render loop.
+   - Breakpoints:
+     * Wide (`width >= 120`): split layout — Left (58%) 7-stage Kill Chain
+       stepper + live ops/transcript feed + input box; Right (42%) tabbed
+       inspector (`1`-`6`).
+     * Standard (`80 <= width < 120`): full-screen tabbed view with a 2-line
+       persistent telemetry bar (mission ID/status, active phase, mode, OPSEC
+       profile/detections meter, token & USD spending vs budget).
+
+2. Six TUI War Room Panels (`1`-`6` tabs):
+   - `[1]` Ops / Kill Chain: 7-stage stepper (`RECON -> WEAPONIZE -> DELIVER ->
+     EXPLOIT -> INSTALL -> C2 -> ACTIONS`), operator-tagged event feed,
+     `enter` to inspect full tool input/output JSON in a scrollable pager.
+   - `[2]` Operators: 8-archetype roster from `WarRoomSnapshot.Operators`
+     (`Callsign | State | Done/Fail | Risk` bar) + `j/k` bottom Dossier Drawer
+     showing MITRE tactics, `ToolCats`, and current/last task.
+   - `[3]` Targets: collapsible severity-colored tree built from
+     `WarRoomSnapshot.Targets` + `Findings`
+     (`Host -> Port/Proto -> Service/CPE -> Candidate CVEs -> Findings`).
+   - `[4]` Vault: findings table from `WarRoomSnapshot.Findings` filterable by
+     severity (`c/h/m/l/i`), `enter` for full details (CVSS v3.1 vector,
+     evidence, CWE/CVE, remediation), `e` export picker (JSON / SARIF / HTML /
+     Markdown / PDF via `internal/export/`).
+   - `[5]` Arsenal: live 79-tool catalog (including `nuclei_scan`, `nmap_scan`,
+     `exploit_verify`, `ctf_*`, etc.) via injected catalog/exec callbacks in
+     `tui.Setup` (never direct OS calls inside `internal/tui`), `[ok]` /
+     `[missing]` + `lab_only` badges, filter input, and inline quick-run modal.
+   - `[6]` OPSEC & Bench: active preset switcher (`Silent`/`Covert`/`Loud`,
+     `Strict`/`Default` RoE, `Balanced`/`Stealth`/`Breach` team), IOC/detection
+     log & meter, and live Cybench / NYU CTF / XBOW / JuiceShop / local-ctf
+     benchmark scoreboard (run trigger + pass/fail/score summary).
+
+3. Interactive Approval Modal (`internal/tui/`):
+   - When `mode == ModeDefault` and a tool requires exact-action approval
+     (emitted by Claude's Phase 4 `ApprovalController` event/callback):
+     * Render centered modal card showing exact tool name, target, and JSON
+       arguments: `[y] allow once  [a] allow for mission  [n] deny`.
+     * Bind `space` (outside text inputs) to pause/resume active mission via
+       Harness control callback (`PauseMission` / `ResumeMission`).
+
+--------------------------------------------------------------------------------
+[CLAUDE — REMAINING PHASE 4 ENGINE GLUE & FINAL VERIFICATION] (TODO)
+--------------------------------------------------------------------------------
+1. Interactive approvals for WebSocket clients:
+   - TUI seam is done: engine.WithApprovalHandler(ctx, handler) supplies exact
+     ApprovalRequest arguments and consumes once/mission decisions without
+     bypassing actionKey or scope checks. Wire this opt-in seam into future WS
+     handlers; no engine.Event shape change is required.
+2. Config/CLI Preset Wiring in `config.go`:
+   - Read `ROGUE_OPSEC_PROFILE`, `ROGUE_ROE_PRESET`, `ROGUE_TEAM`, and
+     `ROGUE_BACKTRACK` in `loadOptions()` and pass into `engine.Options`.
+3. Cleanup & Final End-to-End Verification:
+   - Wire or clean up `export.ImportNmapXML` / `export.ImportNucleiJSON` and
+     unused `runExportMission` in `cli.go`.
+   - Run full `go build ./... && go vet ./... && go test -count=1 -race ./...`
+     plus end-to-end checks across CLI, TUI War Room, `--serve` (REST/SSE/WS),
+     `--mcp`, SDK tests, and benchmarks.

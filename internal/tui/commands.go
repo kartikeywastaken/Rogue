@@ -14,6 +14,7 @@ type command struct {
 }
 
 var commands = []command{
+	{"/warroom", "Open the live mission War Room"},
 	{"/help", "Show commands and keys"},
 	{"/model", "Choose the model"},
 	{"/provider", "Change provider, API key, or model"},
@@ -43,6 +44,8 @@ func (m Model) paletteItems() []command {
 func (m Model) runCommand(input string) (Model, tea.Cmd) {
 	name, _, _ := strings.Cut(strings.TrimSpace(input), " ")
 	switch name {
+	case "/warroom":
+		return m.toggleWarRoom()
 	case "/help":
 		m.phase = phaseSession
 		m.push(entry{kind: entNotice, text: "commands"})
@@ -54,6 +57,7 @@ func (m Model) runCommand(input string) (Model, tea.Cmd) {
 			{"enter", "send"},
 			{"shift+enter", "newline (also alt+enter, ctrl+j)"},
 			{"shift+tab", "cycle mode"},
+			{"ctrl+w", "toggle War Room · esc returns to session"},
 			{"esc", "interrupt the running turn"},
 			{"↑ ↓", "prompt history"},
 			{"pgup pgdn", "scroll transcript (or mouse wheel)"},
@@ -69,15 +73,24 @@ func (m Model) runCommand(input string) (Model, tea.Cmd) {
 		m.mode = m.mode.Next()
 		m.notice("mode → " + m.mode.String())
 	case "/clear":
+		if m.war.jobCancel != nil {
+			m.war.jobCancel()
+		}
 		m.stopTurn()
 		m.entries = nil
 		m.notice("transcript cleared")
 	case "/new":
+		if m.war.jobCancel != nil {
+			m.war.jobCancel()
+		}
 		m.stopTurn()
 		m.entries = nil
 		m.total, m.usage = engine.Usage{}, engine.Usage{}
 		m.phase = phaseLanding
 	case "/quit", "/exit":
+		if m.war.jobCancel != nil {
+			m.war.jobCancel()
+		}
 		m.stopTurn()
 		return m, tea.Quit
 	default:

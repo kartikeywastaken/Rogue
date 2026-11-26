@@ -22,19 +22,23 @@ import (
 // that must appear together in a durable checkpoint, such as a finding and its
 // supporting tool observation.
 type RunState struct {
-	Control    *mission.Control
-	Evidence   *evidence.Vault
-	Comms      *comms.Channel
-	Targets    *target.Environment
-	Budget     *llm.Budget
-	Cell       *operator.Cell
-	OPSEC      *opsec.Control
-	toolCalls  int
-	approvals  map[string]Approval
-	detections int
-	usage      Usage
-	mu         sync.Mutex
-	store      *storage.Store
+	Control                       *mission.Control
+	Evidence                      *evidence.Vault
+	Comms                         *comms.Channel
+	Targets                       *target.Environment
+	Budget                        *llm.Budget
+	Cell                          *operator.Cell
+	OPSEC                         *opsec.Control
+	toolCalls                     int
+	approvals                     map[string]Approval
+	approvalRequests              int
+	opsecProfile, roePreset, team string
+	tokenLimit                    int
+	costLimit                     float64
+	detections                    int
+	usage                         Usage
+	mu                            sync.Mutex
+	store                         *storage.Store
 }
 
 func (state *RunState) save() error {

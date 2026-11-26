@@ -24,6 +24,7 @@ const (
 	phaseLanding phase = iota
 	phaseSession
 	phaseSetup // provider / API key / model entry
+	phaseWarRoom
 )
 
 type entryKind int
@@ -39,6 +40,7 @@ const (
 type entry struct {
 	kind    entryKind
 	text    string
+	at      time.Time
 	tool    engine.ToolCall
 	running bool
 }
@@ -90,6 +92,7 @@ type Model struct {
 	creds    Credentials // what the current engine was built from (key only if typed)
 	provider string      // provider connected through setup, if any
 	baseURL  string      // its base URL, when the provider needs one
+	war      warRoomState
 }
 
 // eventMsg carries one engine event back onto the Elm loop. ch identifies the
@@ -186,6 +189,7 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update wraps update so layout and transcript are always in sync with state.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := m.update(msg)
+	m.pruneApprovals()
 	// Decide whether to stick to the tail after the user's own scrolling but
 	// before content or height change underneath them.
 	follow := m.vp.AtBottom() || m.jump
@@ -199,10 +203,35 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.war.modal == "pager" {
+			offset := m.war.pager.YOffset()
+			m.openWarPager(m.war.pagerText)
+			m.war.pager.SetYOffset(offset)
+		}
+		if m.war.modal == "quick" || m.war.modal == "benchmark" || m.war.modal == "export-path" {
+			m.war.form.SetWidth(max(1, min(90, m.width-10)))
+			m.war.form.SetHeight(max(1, min(8, m.height-12)))
+		}
 		return m, nil
 
 	case eventMsg:
 		return m.onEvent(msg)
+	case warSnapshotMsg:
+		return m.onWarSnapshot(msg)
+	case warTickMsg:
+		if m.phase == phaseWarRoom {
+			return m, m.pollWarRoom()
+		}
+		return m, nil
+	case warResultMsg:
+		return m.onWarResult(msg)
+	case approvalMsg:
+		if msg.ch != m.events || !m.running {
+			return m, nil
+		}
+		m.war.approvals = append(m.war.approvals, msg)
+		m.input.Blur()
+		return m, waitApproval(m.war.approvalCh, m.events, m.war.approvalDone)
 
 	case connectedMsg:
 		return m.onConnected(msg)
@@ -227,11 +256,17 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseWheelMsg:
+		if m.phase == phaseWarRoom {
+			return m.onWarMouse(msg)
+		}
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
 		return m, cmd
 
 	case tea.PasteMsg:
+		if m.phase == phaseWarRoom || len(m.war.approvals) > 0 {
+			return m.onWarPaste(msg)
+		}
 		var cmd tea.Cmd
 		if s := m.setup; s != nil {
 			switch s.step {
@@ -262,9 +297,15 @@ func (m Model) onKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	k := msg.String()
 	if k == "ctrl+c" {
 		m.stopTurn()
+		if m.war.jobCancel != nil {
+			m.war.jobCancel()
+		}
 		return m, tea.Quit
 	}
 	m.flash = ""
+	if len(m.war.approvals) > 0 {
+		return m.onApprovalKey(msg)
+	}
 
 	if m.setup != nil {
 		return m.onSetupKey(msg)
@@ -272,6 +313,12 @@ func (m Model) onKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	if m.picker {
 		return m.onPickerKey(msg)
+	}
+	if k == "ctrl+w" {
+		return m.toggleWarRoom()
+	}
+	if m.phase == phaseWarRoom {
+		return m.onWarKey(msg)
 	}
 
 	if cmds := m.paletteItems(); cmds != nil {
@@ -368,23 +415,58 @@ func (m Model) submit() (Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.war.busy {
+		m.flash = "a War Room operation is running · x to cancel"
+		return m, nil
+	}
+	if m.eng == nil {
+		m.flash = "connect a provider first · /provider"
+		return m, nil
+	}
+	if m.war.roe == "strict" && m.mode == engine.ModeAuto {
+		m.flash = "strict RoE requires default or plan mode"
+		return m, nil
+	}
 	m.input.Reset()
 	if n := len(m.history); n == 0 || m.history[n-1] != text {
 		m.history = append(m.history, text)
 	}
 	m.histIdx = len(m.history)
 
-	m.phase = phaseSession
+	if m.phase != phaseWarRoom {
+		m.phase = phaseSession
+	}
 	m.push(entry{kind: entUser, text: text})
 	m.jump = true
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
-	m.events = m.eng.Run(ctx, engine.Request{Prompt: text, Model: m.model, Mode: m.mode})
+	m.war.approvalCh = make(chan approvalMsg, 8)
+	m.war.approvalDone = ctx.Done()
+	requests := m.war.approvalCh
+	ctx = engine.WithApprovalHandler(ctx, func(ctx context.Context, req engine.ApprovalRequest) (engine.ApprovalDecision, error) {
+		reply := make(chan engine.ApprovalDecision, 1)
+		select {
+		case requests <- approvalMsg{request: req, reply: reply, done: ctx.Done()}:
+		case <-ctx.Done():
+			return engine.ApprovalDeny, ctx.Err()
+		}
+		select {
+		case decision := <-reply:
+			return decision, nil
+		case <-ctx.Done():
+			return engine.ApprovalDeny, ctx.Err()
+		}
+	})
+	var observer func(string, engine.Event) error
+	if svc := m.services(); svc != nil {
+		observer = svc.Lifecycle
+	}
+	m.events = runTurn(ctx, m.eng, engine.Request{Prompt: text, Model: m.model, Mode: m.mode}, observer)
 	m.running = true
 	m.turnStart = time.Now()
 	m.usage = engine.Usage{}
-	return m, tea.Batch(waitFor(m.events), m.spin.Tick)
+	return m, tea.Batch(waitFor(m.events), waitApproval(requests, m.events, ctx.Done()), m.spin.Tick)
 }
 
 func (m Model) onEvent(msg eventMsg) (Model, tea.Cmd) {
@@ -450,6 +532,8 @@ func (m *Model) stopTurn() {
 		m.cancel()
 	}
 	m.cancel, m.events, m.running = nil, nil, false
+	m.war.approvals = nil
+	m.input.Focus()
 	for i := range m.entries {
 		if m.entries[i].kind == entTool && m.entries[i].running {
 			m.entries[i].running = false
@@ -458,7 +542,7 @@ func (m *Model) stopTurn() {
 	}
 }
 
-func (m *Model) push(e entry) { m.entries = append(m.entries, e) }
+func (m *Model) push(e entry) { e.at = time.Now(); m.entries = append(m.entries, e) }
 
 // notice records a status line in the transcript, or flashes it on the landing.
 func (m *Model) notice(text string) {
@@ -475,7 +559,10 @@ func (m *Model) layout() {
 		return
 	}
 	ww := m.workWidth()
-	m.input.SetWidth(ww - 4) // rounded border + 1 col padding each side
+	if m.phase == phaseWarRoom {
+		ww = m.warInputWidth()
+	}
+	m.input.SetWidth(max(1, ww-4)) // rounded border + 1 col padding each side
 	if s := m.setup; s != nil {
 		w := min(ww, 72) - 4 - 2 // box chrome, then the "› " prompt
 		s.url.SetWidth(w)

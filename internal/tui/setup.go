@@ -43,6 +43,7 @@ type SetupOptions struct {
 // Setup wires the screen to the outside world. The TUI never touches files or
 // the network itself: main supplies the callbacks.
 type Setup struct {
+	WarRoom *WarRoomServices
 	Reason  string      // why setup opened at startup
 	Current Credentials // what a startup engine was built from (no key); enables /model catalog switching
 	Options func() SetupOptions
@@ -124,6 +125,10 @@ func newSetupInput(placeholder string, secret bool) textinput.Model {
 
 // openSetup shows the setup screen. From a running session, esc returns there.
 func (m *Model) openSetup() tea.Cmd {
+	if m.war.busy {
+		m.notice("finish the War Room operation before changing provider")
+		return nil
+	}
 	if m.setupCfg == nil || m.setupCfg.Connect == nil {
 		m.notice("provider setup is not available in this build")
 		return nil
@@ -455,8 +460,16 @@ func (m *Model) connect(remember bool) tea.Cmd {
 	creds.Remember = remember
 	s.step = stepConnecting
 	connect := m.setupCfg.Connect
+	configure := m.warEngineConfig()
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
 		eng, err := connect(creds)
+		if eng != nil {
+			var configureErr error
+			eng, configureErr = configure(eng)
+			if configureErr != nil {
+				err = configureErr
+			}
+		}
 		return connectedMsg{eng: eng, err: err, creds: creds}
 	})
 }
@@ -473,6 +486,7 @@ func (m Model) onConnected(msg connectedMsg) (Model, tea.Cmd) {
 	}
 	m.stopTurn()
 	m.eng = msg.eng
+	m.resetWarSnapshot()
 	m.creds = msg.creds
 	m.provider = msg.creds.Provider
 	m.baseURL = msg.creds.BaseURL
@@ -492,6 +506,9 @@ func (m Model) onConnected(msg connectedMsg) (Model, tea.Cmd) {
 		m.notice(errText(msg.err))
 	} else if msg.creds.Remember {
 		m.notice("saved to " + s.opts.SavePath + " (owner-only)")
+	}
+	if m.phase == phaseWarRoom {
+		return m, m.pollWarRoom()
 	}
 	return m, nil
 }

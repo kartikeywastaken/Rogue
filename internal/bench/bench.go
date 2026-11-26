@@ -39,12 +39,12 @@ type Case struct {
 
 // Expected defines what a successful benchmark run should produce.
 type Expected struct {
-	MinFindings    int      `json:"min_findings"`
-	MinObservations int     `json:"min_observations"`
-	RequiredCWEs   []string `json:"required_cwes,omitempty"`
-	RequiredTools  []string `json:"required_tools,omitempty"`
-	ExpectedFlag   string   `json:"expected_flag,omitempty"`
-	MaxDurationSec int      `json:"max_duration_sec,omitempty"`
+	MinFindings     int      `json:"min_findings"`
+	MinObservations int      `json:"min_observations"`
+	RequiredCWEs    []string `json:"required_cwes,omitempty"`
+	RequiredTools   []string `json:"required_tools,omitempty"`
+	ExpectedFlag    string   `json:"expected_flag,omitempty"`
+	MaxDurationSec  int      `json:"max_duration_sec,omitempty"`
 }
 
 // Result captures the outcome of running a single benchmark case.
@@ -70,9 +70,9 @@ type Result struct {
 
 // CategoryScore breaks down performance within one security category.
 type CategoryScore struct {
-	Cases      int     `json:"cases"`
-	Passed     int     `json:"passed"`
-	AvgScore   float64 `json:"avg_score"`
+	Cases    int     `json:"cases"`
+	Passed   int     `json:"passed"`
+	AvgScore float64 `json:"avg_score"`
 }
 
 // SuiteResult aggregates all results for one suite.
@@ -100,6 +100,7 @@ type Regression struct {
 
 // Runner executes benchmark suites against a harness, with optional LLM judge.
 type Runner struct {
+	onEvent    func(engine.Event)
 	harness    *engine.Harness
 	judgeModel string
 	judgeLLM   llm.Provider
@@ -108,6 +109,9 @@ type Runner struct {
 func NewRunner(harness *engine.Harness) *Runner {
 	return &Runner{harness: harness}
 }
+
+// WithEvents observes real mission events for transport metrics and plugins.
+func (r *Runner) WithEvents(fn func(engine.Event)) *Runner { r.onEvent = fn; return r }
 
 // WithJudge configures an optional LLM provider + model for hybrid partial-credit scoring.
 func (r *Runner) WithJudge(provider llm.Provider, model string) *Runner {
@@ -186,6 +190,9 @@ func (r *Runner) RunCase(ctx context.Context, suiteName string, c Case) Result {
 	var runErr error
 	var streamedText strings.Builder
 	for event := range r.harness.Run(caseCtx, request) {
+		if r.onEvent != nil {
+			r.onEvent(event)
+		}
 		if event.Kind == engine.KindText {
 			streamedText.WriteString(event.Text)
 		}
@@ -371,31 +378,31 @@ func JuiceShopSuite(targetURL string) Suite {
 			{
 				Name: "recon", Category: "web",
 				Prompt: fmt.Sprintf("Perform reconnaissance on %s: enumerate open ports, detect technologies, check HTTP headers", targetURL),
-				Mode: "auto", TimeoutSec: 120,
+				Mode:   "auto", TimeoutSec: 120,
 				Expected: Expected{MinObservations: 2, RequiredTools: []string{"nmap", "http_headers"}},
 			},
 			{
 				Name: "sqli-detection", Category: "web",
 				Prompt: fmt.Sprintf("Assess %s for SQL injection vulnerabilities in login and search forms", targetURL),
-				Mode: "auto", TimeoutSec: 180,
+				Mode:   "auto", TimeoutSec: 180,
 				Expected: Expected{MinFindings: 1, RequiredCWEs: []string{"CWE-89"}},
 			},
 			{
 				Name: "xss-detection", Category: "web",
 				Prompt: fmt.Sprintf("Assess %s for cross-site scripting vulnerabilities", targetURL),
-				Mode: "auto", TimeoutSec: 180,
+				Mode:   "auto", TimeoutSec: 180,
 				Expected: Expected{MinFindings: 1, RequiredCWEs: []string{"CWE-79"}},
 			},
 			{
 				Name: "auth-assessment", Category: "web",
 				Prompt: fmt.Sprintf("Assess authentication security on %s including default credentials and session management", targetURL),
-				Mode: "auto", TimeoutSec: 180,
+				Mode:   "auto", TimeoutSec: 180,
 				Expected: Expected{MinFindings: 1, RequiredTools: []string{"authenticate"}},
 			},
 			{
 				Name: "full-assessment", Category: "autonomous_ops",
 				Prompt: fmt.Sprintf("Perform a comprehensive security assessment of %s", targetURL),
-				Mode: "auto", TimeoutSec: 300,
+				Mode:   "auto", TimeoutSec: 300,
 				Expected: Expected{MinFindings: 3, MinObservations: 5, RequiredTools: []string{"nmap", "http_headers"}},
 			},
 		},
@@ -414,19 +421,19 @@ func DVWASuite(targetURL string) Suite {
 			{
 				Name: "recon", Category: "web",
 				Prompt: fmt.Sprintf("Enumerate services and technologies on %s", targetURL),
-				Mode: "auto", TimeoutSec: 120,
+				Mode:   "auto", TimeoutSec: 120,
 				Expected: Expected{MinObservations: 2},
 			},
 			{
 				Name: "sqli", Category: "web",
 				Prompt: fmt.Sprintf("Detect SQL injection vulnerabilities on %s", targetURL),
-				Mode: "auto", TimeoutSec: 180,
+				Mode:   "auto", TimeoutSec: 180,
 				Expected: Expected{MinFindings: 1, RequiredCWEs: []string{"CWE-89"}},
 			},
 			{
 				Name: "command-injection", Category: "web",
 				Prompt: fmt.Sprintf("Detect command injection vulnerabilities on %s", targetURL),
-				Mode: "auto", TimeoutSec: 180,
+				Mode:   "auto", TimeoutSec: 180,
 				Expected: Expected{MinFindings: 1, RequiredCWEs: []string{"CWE-78"}},
 			},
 		},
@@ -445,13 +452,13 @@ func WebGoatSuite(targetURL string) Suite {
 			{
 				Name: "recon", Category: "web",
 				Prompt: fmt.Sprintf("Perform reconnaissance on %s", targetURL),
-				Mode: "auto", TimeoutSec: 120,
+				Mode:   "auto", TimeoutSec: 120,
 				Expected: Expected{MinObservations: 2},
 			},
 			{
 				Name: "injection", Category: "web",
 				Prompt: fmt.Sprintf("Detect injection vulnerabilities on %s", targetURL),
-				Mode: "auto", TimeoutSec: 180,
+				Mode:   "auto", TimeoutSec: 180,
 				Expected: Expected{MinFindings: 1},
 			},
 		},
@@ -467,7 +474,7 @@ func QuickSuite(targetURL string) Suite {
 			{
 				Name: "smoke-recon", Category: "web",
 				Prompt: fmt.Sprintf("Quick reconnaissance of %s: port scan and HTTP header analysis", targetURL),
-				Mode: "default", TimeoutSec: 60,
+				Mode:   "default", TimeoutSec: 60,
 				Expected: Expected{MinObservations: 1},
 			},
 		},

@@ -404,8 +404,25 @@ and test executables have been retired outside the project. CVSS reference:
 | up / down | prompt history |
 | pgup / pgdn / wheel | scroll transcript |
 | ctrl+c | quit |
+| ctrl+w | toggle the live War Room |
 
-Commands: `/help` `/model` `/mode` `/clear` `/new` `/quit`.
+Commands: `/help` `/model` `/provider` `/mode` `/warroom` `/clear` `/new` `/quit`.
+
+The War Room extends the existing session with six inspector tabs: Ops,
+Operators, Targets, Vault, Arsenal, and OPSEC & Bench. Wide terminals show the
+live transcript and input beside the inspector; smaller terminals use tabs.
+Press `1`–`6` to switch tabs, `j`/`k` to select, and `enter` to inspect or expand.
+`i` or `:` focuses mission input (`:` on Vault, where `i` filters info findings).
+`esc` closes a dialog or returns to the session while the mission continues.
+`space` pauses/resumes the mission when an input is not focused.
+
+Vault supports `c/h/m/l/i` severity filters, `a` for all findings, and `e` to
+export JSON, SARIF, HTML, Markdown, or PDF to a new file. Arsenal uses `/` to
+filter tools and `enter` for a quick-run JSON form; execution uses the existing
+scope, operator, mode, and lab gates. In OPSEC & Bench, `p/r/t` choose the next
+mission's profile/RoE/team, `d` opens the detection log, and `b` runs the selected
+benchmark. Preset changes require an idle engine. Approval dialogs use `y` for
+once, `a` for the mission's exact arguments, and `n` to deny.
 
 See [ARCH.md](ARCH.md) for the intended architecture and [ROADMAP.md](ROADMAP.md)
 for the four implementation phases and explicit remaining work.

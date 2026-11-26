@@ -306,7 +306,7 @@ func run() error {
 	}
 	// The TUI can collect a missing provider/key itself, so only a provider
 	// configuration error opens setup; any other startup error still exits.
-	setup := &tui.Setup{Options: setupOptions, Connect: connectProvider, ListModels: listModels}
+	setup := &tui.Setup{Options: setupOptions, Connect: connectProvider, ListModels: listModels, WarRoom: tuiWarRoomServices()}
 	var backend engine.Engine
 	if config, err := loadProviderConfig(); err != nil {
 		setup.Reason = "no usable provider yet: " + err.Error()

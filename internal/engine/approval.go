@@ -17,6 +17,7 @@ type Approval struct {
 	ID, MissionID, Tool, ArgumentsHash string
 	ExpiresAt                          time.Time
 	Used                               bool
+	Reusable                           bool
 }
 
 func actionKey(tool string, args json.RawMessage) (string, error) {
@@ -77,7 +78,7 @@ func (state *RunState) consumeApproval(tool string, args json.RawMessage) error 
 	if !found || grant.Used || !time.Now().Before(grant.ExpiresAt) {
 		return errors.New("exact action approval missing, expired, or already used")
 	}
-	grant.Used = true
+	grant.Used = !grant.Reusable
 	state.approvals[key] = grant
 	data, _ := json.Marshal(grant)
 	if _, err = state.Comms.Publish(comms.Message{From: "control", Topic: "approval.consumed", Content: tool, Data: data}); err != nil {

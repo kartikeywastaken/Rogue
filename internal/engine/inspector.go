@@ -16,28 +16,31 @@ import (
 // mission designed for consumption by the HTTP API and the Phase 4 TUI War Room
 // without breaking the core engine.Engine interface.
 type WarRoomSnapshot struct {
-	MissionID         string                `json:"mission_id"`
-	Objective         string                `json:"objective"`
-	Status            mission.Status        `json:"status"`
-	Phase             domain.KillChainPhase `json:"phase"`
+	MissionID         string                  `json:"mission_id"`
+	Team              string                  `json:"team,omitempty"`
+	TokenLimit        int                     `json:"token_limit,omitempty"`
+	CostLimit         float64                 `json:"cost_limit,omitempty"`
+	Objective         string                  `json:"objective"`
+	Status            mission.Status          `json:"status"`
+	Phase             domain.KillChainPhase   `json:"phase"`
 	Phases            []domain.KillChainPhase `json:"phases"`
-	Progress          float64               `json:"progress"`
-	CreatedAt         time.Time             `json:"created_at"`
-	StartedAt         time.Time             `json:"started_at"`
-	Tasks             []mission.Task        `json:"tasks"`
-	Operators         []operator.Agent      `json:"operators"`
-	Targets           target.Snapshot       `json:"targets"`
-	Findings          []domain.Finding      `json:"findings"`
-	ObservationsCount int                   `json:"observations_count"`
-	SuccessfulObs     int                   `json:"successful_obs"`
-	FailedObs         int                   `json:"failed_obs"`
-	PendingApprovals  int                   `json:"pending_approvals"`
-	OPSEC             opsec.Snapshot        `json:"opsec"`
-	OPSECProfile      string                `json:"opsec_profile"`
-	RoEPreset         string                `json:"roe_preset"`
-	Detections        int                   `json:"detections"`
-	Spending          llm.Spending          `json:"spending"`
-	Messages          []comms.Message       `json:"messages"`
+	Progress          float64                 `json:"progress"`
+	CreatedAt         time.Time               `json:"created_at"`
+	StartedAt         time.Time               `json:"started_at"`
+	Tasks             []mission.Task          `json:"tasks"`
+	Operators         []operator.Agent        `json:"operators"`
+	Targets           target.Snapshot         `json:"targets"`
+	Findings          []domain.Finding        `json:"findings"`
+	ObservationsCount int                     `json:"observations_count"`
+	SuccessfulObs     int                     `json:"successful_obs"`
+	FailedObs         int                     `json:"failed_obs"`
+	PendingApprovals  int                     `json:"pending_approvals"`
+	OPSEC             opsec.Snapshot          `json:"opsec"`
+	OPSECProfile      string                  `json:"opsec_profile"`
+	RoEPreset         string                  `json:"roe_preset"`
+	Detections        int                     `json:"detections"`
+	Spending          llm.Spending            `json:"spending"`
+	Messages          []comms.Message         `json:"messages"`
 }
 
 // Inspector is the optional Phase 1 seam implemented by *Harness so TUI/API
@@ -106,14 +109,8 @@ func snapshotFromRunState(state *RunState) WarRoomSnapshot {
 			fail++
 		}
 	}
-	pendingApprovals := 0
-	now := time.Now()
-	for _, a := range state.approvals {
-		if !a.Used && now.Before(a.ExpiresAt) {
-			pendingApprovals++
-		}
-	}
 	return WarRoomSnapshot{
+		Team: state.team, TokenLimit: state.tokenLimit, CostLimit: state.costLimit,
 		MissionID:         m.ID,
 		Objective:         m.Objective,
 		Status:            m.Status,
@@ -129,10 +126,10 @@ func snapshotFromRunState(state *RunState) WarRoomSnapshot {
 		ObservationsCount: len(obs),
 		SuccessfulObs:     succ,
 		FailedObs:         fail,
-		PendingApprovals:  pendingApprovals,
+		PendingApprovals:  state.approvalRequests,
 		OPSEC:             state.OPSEC.Snapshot(),
-		OPSECProfile:      opsec.ActiveProfileSnapshot().Name,
-		RoEPreset:         opsec.ActiveRoESnapshot().Name,
+		OPSECProfile:      state.opsecProfile,
+		RoEPreset:         state.roePreset,
 		Detections:        state.detections,
 		Spending:          state.Budget.Snapshot(),
 		Messages:          publicMessages(state.Comms.History("")),

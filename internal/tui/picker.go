@@ -138,16 +138,24 @@ func (m Model) selectModel(id string) (Model, tea.Cmd) {
 		m.flash = id + " is not configured · add it to ROGUE_MODELS or use /provider"
 		return m, nil
 	}
-	if m.running {
+	if m.running || m.war.busy {
 		m.flash = "a turn is running · esc to interrupt, then switch"
 		return m, nil
 	}
 	m.picker, m.switching = false, true
 	m.notice("switching to " + id + "…")
 	creds, connect := m.creds, m.setupCfg.Connect
+	configure := m.warEngineConfig()
 	creds.Model = id
 	return m, tea.Batch(m.spin.Tick, func() tea.Msg {
 		eng, err := connect(creds)
+		if eng != nil {
+			var configureErr error
+			eng, configureErr = configure(eng)
+			if configureErr != nil {
+				err = configureErr
+			}
+		}
 		return modelSwitchedMsg{eng: eng, err: err, creds: creds}
 	})
 }
@@ -164,6 +172,7 @@ func (m Model) onModelSwitched(msg modelSwitchedMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.eng, m.creds = msg.eng, msg.creds
+	m.resetWarSnapshot()
 	m.model = msg.creds.Model
 	if ms := m.eng.Models(); len(ms) > 0 && !slices.Contains(ms, m.model) {
 		m.model = ms[0]
@@ -176,6 +185,9 @@ func (m Model) onModelSwitched(msg modelSwitchedMsg) (Model, tea.Cmd) {
 		text += " · saved as the default model"
 	}
 	m.notice(text)
+	if m.phase == phaseWarRoom {
+		return m, m.pollWarRoom()
+	}
 	return m, nil
 }
 
