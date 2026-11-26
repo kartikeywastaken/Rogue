@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"rogue/internal/domain"
 )
 
 // RegisterExtendedTools adds Phase 2 external CLI wrappers and crypto_hash to registry.
@@ -50,6 +52,7 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 	registry.Register(fileIdentifyTool(runner))
 	registry.Register(exiftoolMetaTool(runner))
 	registry.Register(binwalkAnalyzeTool(runner))
+	registry.Register(nucleiScanTool(runner))
 	registry.Register(cryptoHashTool())
 }
 
@@ -769,6 +772,218 @@ func binwalkAnalyzeTool(runner Runner) *Tool {
 				return fail(err)
 			}
 			return &Result{Success: true, Summary: fmt.Sprintf("binwalk signature/entropy scan completed for %s", filepath.Base(clean)), Data: map[string]any{"raw": string(out)}}, nil
+		},
+	}
+}
+
+// ── vulnerability scanner — Nuclei ───────────────────────────────────────────
+
+// validSeverityList checks that a comma-separated severity string contains only
+// nuclei-recognized values and returns the cleaned list.
+func validSeverityList(raw string) (string, error) {
+	allowed := map[string]bool{"critical": true, "high": true, "medium": true, "low": true, "info": true, "unknown": true}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		s := strings.TrimSpace(strings.ToLower(part))
+		if s == "" {
+			continue
+		}
+		if !allowed[s] {
+			return "", fmt.Errorf("invalid severity %q; allowed: critical,high,medium,low,info", s)
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return "critical,high,medium", nil
+	}
+	return strings.Join(out, ","), nil
+}
+
+// nucleiSeverityMap converts a nuclei severity string to a domain.Severity.
+func nucleiSeverityMap(s string) domain.Severity {
+	switch strings.ToLower(s) {
+	case "critical":
+		return domain.SevCritical
+	case "high":
+		return domain.SevHigh
+	case "medium":
+		return domain.SevMedium
+	case "low":
+		return domain.SevLow
+	default:
+		return domain.SevInfo
+	}
+}
+
+// nucleiJSONLine is the per-finding JSON structure emitted by `nuclei -jsonl`.
+type nucleiJSONLine struct {
+	TemplateID string `json:"template-id"`
+	Info       struct {
+		Name        string   `json:"name"`
+		Severity    string   `json:"severity"`
+		Description string   `json:"description"`
+		Reference   []string `json:"reference"`
+		Classification struct {
+			CWEID     json.RawMessage `json:"cwe-id"`
+			CVSSScore float64         `json:"cvss-score"`
+		} `json:"classification"`
+	} `json:"info"`
+	Host      string `json:"host"`
+	MatchedAt string `json:"matched-at"`
+}
+
+// parseCWEID handles cwe-id being either a JSON string or JSON array of strings.
+func parseCWEID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return single
+	}
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil && len(arr) > 0 {
+		return strings.Join(arr, ",")
+	}
+	return ""
+}
+
+func nucleiScanTool(runner Runner) *Tool {
+	return &Tool{
+		Name:        "nuclei_scan",
+		Category:    "vuln",
+		Description: "Nuclei vulnerability scanner. Runs community templates against a scoped host with JSONL output, rate-limited and without out-of-band interaction callbacks. Host must be in mission scope.",
+		Parameters:  stringSchema([]string{"host"}, "host", "port", "severity", "templates", "tags"),
+		Available:   func() error { _, err := executable("nuclei", ""); return err },
+		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
+			var a struct {
+				Host      string `json:"host"`
+				Port      string `json:"port"`
+				Severity  string `json:"severity"`
+				Templates string `json:"templates"`
+				Tags      string `json:"tags"`
+			}
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, err
+			}
+			if err := validateSimpleFlagValue(a.Host, "host"); err != nil {
+				return fail(err)
+			}
+			address, err := scopedAddress(ctx, a.Host)
+			if err != nil {
+				return fail(fmt.Errorf("nuclei_scan: %w", err))
+			}
+
+			port := a.Port
+			if port != "" {
+				if !validPort(port) {
+					return fail(errors.New("nuclei_scan: port must be 1–65535"))
+				}
+				if err := checkPort(ctx, port); err != nil {
+					return fail(fmt.Errorf("nuclei_scan: %w", err))
+				}
+			}
+
+			sev, err := validSeverityList(a.Severity)
+			if err != nil {
+				return fail(fmt.Errorf("nuclei_scan: %w", err))
+			}
+
+			path, err := executable("nuclei", "")
+			if err != nil {
+				return fail(err)
+			}
+
+			// Build target string: use scoped IP directly with vhost header.
+			target := address
+			if port != "" {
+				target = net.JoinHostPort(address, port)
+			}
+
+			args := []string{
+				"-target", target,
+				"-jsonl",
+				"-severity", sev,
+				"-silent",
+				"-no-interactsh",          // no OOB callbacks
+				"-rl", "50",               // rate limit: 50 req/s
+				"-timeout", "15",          // per-request timeout in seconds
+				"-retries", "1",
+				"-no-color",
+				"-stats-json",             // suppress interactive stats
+			}
+
+			// Template-id filter: allow only alphanumeric, dash, comma.
+			if a.Templates != "" {
+				if err := validateSimpleFlagValue(a.Templates, "templates"); err != nil {
+					return fail(err)
+				}
+				args = append(args, "-t", a.Templates)
+			}
+
+			// Tags filter: allow only alphanumeric, dash, comma.
+			if a.Tags != "" {
+				if err := validateSimpleFlagValue(a.Tags, "tags"); err != nil {
+					return fail(err)
+				}
+				args = append(args, "-tags", a.Tags)
+			}
+
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
+			}
+
+			// Parse JSONL output into domain.Finding objects.
+			var findings []domain.Finding
+			var parsed []map[string]any
+			for _, line := range strings.Split(string(out), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || line[0] != '{' {
+					continue
+				}
+				var nr nucleiJSONLine
+				if err := json.Unmarshal([]byte(line), &nr); err != nil {
+					continue // skip malformed lines
+				}
+
+				cweID := parseCWEID(nr.Info.Classification.CWEID)
+
+				var refs []string
+				if len(nr.Info.Reference) > 0 {
+					refs = nr.Info.Reference
+				}
+
+				findings = append(findings, domain.Finding{
+					Title:       fmt.Sprintf("[%s] %s", nr.TemplateID, nr.Info.Name),
+					Description: nr.Info.Description,
+					Severity:    nucleiSeverityMap(nr.Info.Severity),
+					CVSS:        nr.Info.Classification.CVSSScore,
+					CWE:         cweID,
+					Evidence:    append([]string{fmt.Sprintf("matched-at: %s", nr.MatchedAt)}, refs...),
+					Phase:       domain.PhaseRecon,
+				})
+
+				parsed = append(parsed, map[string]any{
+					"template_id": nr.TemplateID,
+					"name":        nr.Info.Name,
+					"severity":    nr.Info.Severity,
+					"host":        nr.Host,
+					"matched_at":  nr.MatchedAt,
+					"cwe":         cweID,
+					"cvss":        nr.Info.Classification.CVSSScore,
+				})
+			}
+
+			summary := fmt.Sprintf("nuclei scan completed on %s (address %s): %d finding(s)", a.Host, address, len(findings))
+			return &Result{
+				Success:      true,
+				Summary:      summary,
+				Findings:     findings,
+				Data:         map[string]any{"host": a.Host, "address": address, "severity_filter": sev, "findings_count": len(findings), "findings": parsed},
+				Artifact:     out,
+				ArtifactType: "application/x-ndjson",
+			}, nil
 		},
 	}
 }
