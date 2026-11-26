@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"rogue/internal/opsec"
 	"rogue/internal/research"
 )
 
@@ -88,7 +89,7 @@ var researchClient = &http.Client{
 }
 
 // probeGET makes a bounded GET to rawURL and returns the status and up to 64 KB
-// of body. Only http/https schemes are permitted.
+// of body. Only http/https schemes are permitted. The URL must be in scope.
 func probeGET(ctx context.Context, rawURL string) (status int, body string, err error) {
 	parsed, pErr := url.Parse(rawURL)
 	if pErr != nil {
@@ -97,11 +98,14 @@ func probeGET(ctx context.Context, rawURL string) (status int, body string, err 
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return 0, "", errors.New("only http/https probes are supported")
 	}
+	if scopeErr := checkURL(ctx, rawURL); scopeErr != nil {
+		return 0, "", fmt.Errorf("probe out of scope: %w", scopeErr)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return 0, "", err
 	}
-	req.Header.Set("User-Agent", "ROGUE-Research/1.0")
+	req.Header.Set("User-Agent", opsec.RandomUserAgent())
 	resp, err := researchClient.Do(req)
 	if err != nil {
 		return 0, "", err
@@ -112,7 +116,8 @@ func probeGET(ctx context.Context, rawURL string) (status int, body string, err 
 }
 
 // probePOST makes a bounded POST to rawURL with form values or a JSON body.
-// bodyType is "form" or "json". Only http/https schemes are permitted.
+// bodyType is "form" or "json". Only http/https schemes are permitted. The URL
+// must be in scope.
 func probePOST(ctx context.Context, rawURL, bodyType, payload string) (status int, body string, err error) {
 	parsed, pErr := url.Parse(rawURL)
 	if pErr != nil {
@@ -120,6 +125,9 @@ func probePOST(ctx context.Context, rawURL, bodyType, payload string) (status in
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return 0, "", errors.New("only http/https probes are supported")
+	}
+	if scopeErr := checkURL(ctx, rawURL); scopeErr != nil {
+		return 0, "", fmt.Errorf("probe out of scope: %w", scopeErr)
 	}
 	var (
 		contentType string
@@ -138,7 +146,7 @@ func probePOST(ctx context.Context, rawURL, bodyType, payload string) (status in
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("User-Agent", "ROGUE-Research/1.0")
+	req.Header.Set("User-Agent", opsec.RandomUserAgent())
 	resp, err := researchClient.Do(req)
 	if err != nil {
 		return 0, "", err
@@ -631,7 +639,7 @@ func registerCerberus(registry *Registry) {
 						{"id", nil, "id"},
 						{"uname", []string{"-r"}, "uname_r"},
 						{"find", []string{"/usr/bin", "/usr/sbin", "-perm", "-4000", "-type", "f"}, "suid_binaries"},
-						{"sudo", []string{"-l"}, "sudo_l"},
+						{"sudo", []string{"-n", "-l"}, "sudo_l"},
 						{"find", []string{"/etc/cron*", "-writable"}, "writable_cron"},
 					}
 				} else {

@@ -118,6 +118,36 @@ func (cell *Cell) Finish(role domain.Archetype, failure error) {
 	cell.active--
 }
 
+// maxPerArchetype caps how many agents of one archetype can be auto-spawned.
+const maxPerArchetype = 3
+
+// EnsureAvailable auto-spawns a fresh agent for role if the existing one is
+// burned or permanently unavailable and the per-archetype cap allows it.
+// It resets the slot to Idle so a subsequent Begin call succeeds.
+// This deliberately reuses the same slot — ROGUE cells have one slot per
+// archetype, so "spawning" means resetting a burned agent.
+func (cell *Cell) EnsureAvailable(role domain.Archetype) bool {
+	cell.mu.Lock()
+	defer cell.mu.Unlock()
+	agent, found := cell.agents[role]
+	if !found {
+		return false
+	}
+	if agent.State != domain.StateBurned {
+		return true // already usable
+	}
+	if agent.Completed+agent.Failed >= maxPerArchetype {
+		return false // cap reached — do not re-spawn
+	}
+	profile := Profiles()[role]
+	cell.agents[role] = Agent{
+		ID:      profile.Callsign,
+		Profile: profile,
+		State:   domain.StateIdle,
+	}
+	return true
+}
+
 func (cell *Cell) Snapshot() []Agent {
 	cell.mu.Lock()
 	defer cell.mu.Unlock()

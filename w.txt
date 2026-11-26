@@ -1,0 +1,171 @@
+ROGUE Implementation Split & 4-Phase Plan (w.txt)
+TUI-Oriented War Room Deferred to Phase 4 (Last)
+
+================================================================================
+OWNERSHIP BOUNDARY (CLEAN INTERFACE TO AVOID CONFLICTS)
+================================================================================
+CODEX owns:
+  - Keyless coding-agent model backends (internal/llm/: claude-code, codex CLI,
+    hermes fallback, /provider setup & --check-provider support, /api/codex/*)
+  - Ecosystem & transports (internal/export/ PDF, internal/api/ WebSockets,
+    TypeScript SDK, Metrics/Plugins hook wiring in --serve / --mcp / TUI)
+  - User Interface & TUI War Room (internal/tui/: built in Phase 4 once all
+    backend data, presets, benchmarks, and exports are ready)
+
+CLAUDE owns:
+  - Security hardening & core engine seam (internal/arsenal/research.go scope
+    fixes, internal/engine/ Inspector/WarRoomSnapshot interface)
+  - External security CLI wrappers & active scanners (internal/arsenal/)
+  - OPSEC evasion, team factories, dynamic scaling & cognition (internal/opsec/,
+    internal/operator/, internal/agent/, internal/engine/)
+  - Multi-domain modules & benchmarks (internal/whitebox/, internal/cloud/,
+    binary/crypto/smart-contract helpers, internal/bench/)
+
+SHARED SEAM (internal/engine/):
+  - Read-only Inspector / WarRoomSnapshot interface exposed by Harness in
+    Phase 1. Claude populates mission phase, 8 operator states/risks, task DAG,
+    target tree, findings/evidence, OPSEC counters, approvals, and budget;
+    Codex consumes it in the Phase 4 TUI War Room without breaking engine.Engine.
+
+================================================================================
+PHASE 1 — FOUNDATION, HARDENING & KEYLESS CODING-AGENT MODELS
+================================================================================
+Goal: Fix scope-escape risks in research.go, add Claude Code / Codex as keyless
+LLM backends, wire telemetry/plugin parity, and wrap high-priority CLI scanners.
+
+[CLAUDE]
+  1. Research Organ Security Hardening (internal/arsenal/research.go):
+     - Wire checkURL(ctx, ...) and redirect-target scope validation into
+       probeGET and probePOST so execute=true strictly obeys ROGUE_SCOPE,
+       ROGUE_EXCLUDED, and ROGUE_ALLOWED_PORTS.
+     - Gate execute=true through Policy.Approve when running in default mode.
+     - Fix cerberus_privesc local checks: use `sudo -n -l` (non-interactive) and
+       tolerate partial stdout from `find` when unreadable paths return err != 0.
+  2. Engine Inspection Seam (internal/engine/):
+     - Define optional Inspector interface + WarRoomSnapshot struct (tasks,
+       kill-chain phase status, 8 operator states/risks, target inventory,
+       findings, OPSEC signals, budget/metrics).
+  3. Priority External CLI Wrappers (internal/arsenal/):
+     - Wrap ffuf, gobuster, nikto, sqlmap, openssl, wget, and host using
+       ProcessRunner (stripped env, explicit allowlisted flags, 2 MiB caps).
+
+[CODEX]
+  1. Keyless Coding-Agent Providers (internal/llm/ + internal/tui/setup.go):
+     - Add `claude-code` (claude -p stream-json) and `codex` (codex exec JSON)
+       implementing llm.Provider so ROGUE can run using local authenticated
+       coding-agent sessions with no separate LLM API key.
+     - Add Hermes / fallback chain wiring matching T3MP3ST's resilient calls.
+     - Register providers in llm.Providers, update /provider TUI setup,
+       --check-provider, and add GET /api/codex/status & POST /api/codex/probe
+       in internal/api/.
+  2. Telemetry & Plugin Hook Parity (cli.go, internal/api/, internal/mcp/):
+     - Pass Metrics (telemetry.Collector) and Plugins (plugin.Registry) into
+       --serve, --mcp, and TUI execution paths so lifecycle hooks and counters
+       fire consistently across all modes, not just --assess.
+
+================================================================================
+PHASE 2 — ACTIVE SCANNING, OPSEC EVASION & ECOSYSTEM EXPORTS
+================================================================================
+Goal: Complete CLI/scanner arsenal, OPSEC evasion mechanics, dynamic operator
+scaling, and external ecosystem exports (PDF, WebSockets, TypeScript SDK).
+
+[CLAUDE]
+  1. Remaining External CLI Wrappers (internal/arsenal/):
+     - Add dirb, wfuzz, hydra (lab/explicit-auth gated), whois CLI option, plus
+       binary/forensics tools: xxd, strings, file, exiftool, binwalk.
+  2. Active Scanning & Remote Privesc (internal/arsenal/):
+     - Full TLS cipher/protocol suite enumeration (weak ciphers/old TLS).
+     - Recursive same-origin crawler & form/parameter extractor.
+     - Authorized non-loopback active scanners (beyond 1-endpoint lab checks
+       when explicit scope + approval policy allow).
+     - Remote SSH/session transport option for cerberus_privesc so privilege
+       escalation checks can inspect targets instead of only the ROGUE host.
+  3. OPSEC Evasion & Operator Scaling (internal/opsec/, internal/operator/):
+     - Implement named OPSEC presets (`Silent`, `Covert`, `Loud`) and RoE
+       presets (`StrictRoE`, `DefaultRoE`).
+     - Add randomized HTTP jitter, User-Agent rotation, and traffic blending.
+     - Implement team factories (`Balanced`, `Stealth`, `Breach`) and dynamic
+       operator auto-spawning (up to N per archetype under queue load).
+
+[CODEX]
+  1. PDF Report Export (internal/export/):
+     - Add PDF generator for `--report-format pdf` and API report downloads.
+  2. WebSocket Live Stream (internal/api/):
+     - Add WebSocket endpoint alongside SSE for real-time bidirectional events.
+  3. TypeScript SDK (sdk/):
+     - Build typed TypeScript SDK wrapping `--serve` REST + SSE/WebSocket APIs
+       (missions, targets, findings, tools, approvals, report exports).
+
+================================================================================
+PHASE 3 — MULTI-DOMAIN MODULES, BENCHMARKS & ADVANCED COGNITION
+================================================================================
+Goal: Expand into white-box, cloud, and binary/RE/smart-contract domains; ship
+Cybench/NYU/XBOW benchmark integrations; expose APIs ready for the War Room.
+
+[CLAUDE]
+  1. White-Box Repository Analyzer (internal/whitebox/ + internal/api/):
+     - Repo ingestion, file/dependency decomposition, SAST rules + secret_scan
+       correlation, exposed as an arsenal tool and `POST /api/v1/whitebox/analyze`.
+  2. Cloud & Multi-Domain Security Modules (internal/cloud/, internal/arsenal/):
+     - Scoped AWS/GCP/Azure read-only posture checks (IAM, storage, metadata).
+     - Static binary triage (ELF/PE/Mach-O), crypto helpers, and Solidity /
+       smart-contract security pattern auditing tools.
+  3. Benchmark & CTF Suite Expansion (internal/bench/):
+     - Implement Cybench (40 tasks), NYU CTF Bench (200 tasks), and XBOW/XBEN
+       adapters plus local fixture challenges (ctf/challenges/).
+     - Cover missing categories: binary, crypto, reverse, forensics,
+       autonomous_ops, and OWASP/MITRE/CWE matrices.
+     - Implement exact flag matching + hybrid keyword/LLM-judge partial scoring.
+  4. Advanced Cognition & AI Red-Teaming (internal/agent/, internal/engine/):
+     - Multi-branch backtracking / Tree-of-Thought recovery on failed paths.
+     - AI/LLM target red-teaming module (refusal suppression, encoding evasion).
+
+[CODEX]
+  1. API, MCP & SDK Bindings for Phase 3 Capabilities:
+     - Expose white-box analysis, benchmark runs/results, OPSEC presets, and
+       team factories across `--serve`, `--mcp`, and the TypeScript SDK so all
+       data surfaces are unified before building the War Room UI.
+
+================================================================================
+PHASE 4 — TUI-ORIENTED WAR ROOM (ADDED LAST)
+================================================================================
+Goal: Build the War Room natively inside ROGUE's Bubble Tea v2 TUI on top of
+the completed Phase 1-3 engine, Inspector seam, OPSEC presets, and benchmarks.
+
+[CODEX]
+  1. War Room Shell & Adaptive Layout (internal/tui/):
+     - Add `/warroom` command and `ctrl+w` toggle (plus `esc` back to chat)
+       without interrupting running turns; stay faithful to theme.go's dark
+       wine-plum (#130911) foreground-only palette.
+     - Wide terminals (width >= 120): Split layout — Left (58%) 7-stage Kill
+       Chain stepper + live ops/transcript feed + input box; Right (42%)
+       tabbed inspector pane.
+     - Standard terminals (80-119 cols): Full-screen tabbed view with a 2-line
+       persistent telemetry bar (mission ID/status, phase stepper, mode, OPSEC
+       meter, token/USD budget).
+  2. Six TUI War Room Panels (`1`-`6` tabs):
+     - [1] Ops / Kill Chain: Phase stepper (`RECON -> WEAPONIZE -> DELIVER ->
+       EXPLOIT -> INSTALL -> C2 -> ACTIONS`), streamed operator-tagged events,
+       `enter` to inspect full tool JSON/output in a pager.
+     - [2] Operators: 8-archetype roster (`Callsign | State | Done/Fail | Risk`
+       bar) + `j/k` bottom Dossier Drawer (MITRE tactics, ToolCats, task).
+     - [3] Targets: Collapsible tree (`Host -> Port/Proto -> Service/CPE ->
+       Candidate CVEs -> Findings`), severity-colored.
+     - [4] Vault: Findings table filterable by severity (`c/h/m/l/i`), `enter`
+       for CVSS v3.1 vector & access path, `e` to export JSON/SARIF/HTML/MD/PDF.
+     - [5] Arsenal: Live tool catalog (`nmap [ok] / sqlmap [missing]`), scope/lab
+       badges, and inline quick-run modal.
+     - [6] OPSEC & Bench: Preset switcher (`Silent`/`Covert`/`Loud`,
+       `Balanced`/`Stealth`/`Breach`), IOC log, detection meter, and live
+       Cybench/NYU/JuiceShop benchmark scoreboard.
+  3. Interactive Approval Modal (TUI-Native Killer Feature):
+     - When `mode == default` and a tool requires approval, show a centered
+       approval card with exact tool, target, and arguments:
+       `[y] allow once  [a] allow for mission  [n] deny`.
+
+[CLAUDE]
+  1. Engine <-> TUI Interactive Hooks & Final Verification:
+     - Wire real-time interactive ApprovalController callback channel from
+       Harness into the TUI event stream (and pause/resume control on `space`).
+     - Run end-to-end verification across TUI War Room, CLI, `--serve`, `--mcp`,
+       and benchmark suites.
