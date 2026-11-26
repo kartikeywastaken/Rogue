@@ -5,6 +5,7 @@ package arsenal
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"rogue/internal/whitebox"
 )
@@ -14,7 +15,7 @@ func RegisterWhiteboxTool(registry *Registry) {
 	registry.Register(&Tool{
 		Name:        "whitebox_analyze",
 		Category:    "util",
-		Description: "Static white-box analysis of a local repository: secret detection and SAST patterns. Read-only. Never executes code.",
+		Description: "Static white-box analysis of a local repository: dependency decomposition, redacted secret detection, and SAST patterns. Read-only; never executes code.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"repo_path": map[string]any{"type": "string", "description": "absolute path to the repository root"},
 		}, "required": []string{"repo_path"}},
@@ -32,7 +33,9 @@ func RegisterWhiteboxTool(registry *Registry) {
 			if err != nil {
 				return fail(err)
 			}
-			return ok(report), nil
+			summary := fmt.Sprintf("Scanned %d files: %d secrets, %d SAST findings, %d dependencies",
+				report.FilesScanned, len(report.Secrets), len(report.SASTFindings), len(report.Dependencies))
+			return &Result{Success: true, Summary: summary, Data: report}, nil
 		},
 	})
 }

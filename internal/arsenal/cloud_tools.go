@@ -1,11 +1,12 @@
 package arsenal
 
-// cloud_tools.go — registers aws_enum, gcp_enum, azure_enum tools.
+// cloud_tools.go — registers aws_enum, gcp_enum, azure_enum, and cloud_metadata_check.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 
 	"rogue/internal/cloud"
 )
@@ -18,6 +19,7 @@ func RegisterCloudTools(registry *Registry) {
 		Category:    "cloud",
 		LabOnly:     true,
 		Description: "Enumerate AWS IAM, S3, and EC2 resources via the aws CLI. Requires ROGUE_CLOUD=true and valid AWS credentials.",
+		Available:   func() error { _, err := exec.LookPath("aws"); return err },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"region": map[string]any{"type": "string", "description": "AWS region e.g. us-east-1"},
 		}},
@@ -30,7 +32,7 @@ func RegisterCloudTools(registry *Registry) {
 			if err != nil {
 				return fail(err)
 			}
-			return ok(res), nil
+			return &Result{Success: true, Summary: fmt.Sprintf("AWS read-only enumeration completed (%d checks)", len(res)), Data: res}, nil
 		},
 	})
 
@@ -39,6 +41,7 @@ func RegisterCloudTools(registry *Registry) {
 		Category:    "cloud",
 		LabOnly:     true,
 		Description: "Enumerate GCP IAM, storage, and compute resources via the gcloud CLI. Requires ROGUE_CLOUD=true.",
+		Available:   func() error { _, err := exec.LookPath("gcloud"); return err },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"project": map[string]any{"type": "string", "description": "GCP project ID"},
 		}},
@@ -51,7 +54,7 @@ func RegisterCloudTools(registry *Registry) {
 			if err != nil {
 				return fail(err)
 			}
-			return ok(res), nil
+			return &Result{Success: true, Summary: fmt.Sprintf("GCP read-only enumeration completed (%d checks)", len(res)), Data: res}, nil
 		},
 	})
 
@@ -60,6 +63,7 @@ func RegisterCloudTools(registry *Registry) {
 		Category:    "cloud",
 		LabOnly:     true,
 		Description: "Enumerate Azure IAM, storage, and VM resources via the az CLI. Requires ROGUE_CLOUD=true.",
+		Available:   func() error { _, err := exec.LookPath("az"); return err },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"subscription": map[string]any{"type": "string", "description": "Azure subscription ID"},
 		}},
@@ -72,10 +76,26 @@ func RegisterCloudTools(registry *Registry) {
 			if err != nil {
 				return fail(err)
 			}
-			return ok(res), nil
+			return &Result{Success: true, Summary: fmt.Sprintf("Azure read-only enumeration completed (%d checks)", len(res)), Data: res}, nil
+		},
+	})
+
+	registry.Register(&Tool{
+		Name:        "cloud_metadata_check",
+		Category:    "cloud",
+		LabOnly:     true,
+		Description: "Check whether IMDSv1 (169.254.169.254) responds without IMDSv2 session tokens. Requires ROGUE_CLOUD=true. Never retrieves secrets or credentials.",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
+			res, err := cloud.CheckMetadataPosture(ctx)
+			if err != nil {
+				return fail(err)
+			}
+			summary, _ := res["posture"].(string)
+			if summary == "" {
+				summary, _ = res["note"].(string)
+			}
+			return &Result{Success: true, Summary: summary, Data: res}, nil
 		},
 	})
 }
-
-// ensure fmt is used (whitebox_tool.go imports it via fail())
-var _ = fmt.Sprintf

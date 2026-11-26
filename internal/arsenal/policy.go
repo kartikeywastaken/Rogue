@@ -153,12 +153,47 @@ func scopedDial(ctx context.Context, network, address string) (net.Conn, error) 
 	return nil, last
 }
 
+// authorizeActive checks mission policy when an internal tool requests active
+// side effects (e.g. research organs with execute=true).
+func authorizeActive(ctx context.Context, tool string, args json.RawMessage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p, ok := ctx.Value(policyKey{}).(Policy)
+	if !ok {
+		return errors.New("execution policy required")
+	}
+	if p.Mode == "plan" {
+		return errors.New("plan mode: active execution disabled")
+	}
+	if p.Mode != "default" && p.Mode != "auto" {
+		return errors.New("invalid execution mode")
+	}
+	if len(p.Rules.AllowedTools) > 0 && !slices.Contains(p.Rules.AllowedTools, tool) {
+		return errors.New("tool excluded by mission rules")
+	}
+	if p.Mode == "default" && !slices.Contains(p.Rules.PreapprovedTools, tool) {
+		if p.Approve != nil {
+			return p.Approve(tool, args)
+		}
+		return errors.New("approval required for active execution: configure explicit preapproval or select auto mode within mission scope")
+	}
+	return nil
+}
+
 func scopedHTTPClient() *http.Client {
+	return newScopedHTTPClient(5, true)
+}
+
+func newScopedHTTPClient(maxRedirects int, followRedirects bool) *http.Client {
 	return &http.Client{
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{DialContext: scopedDial, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
+			if !followRedirects {
+				return http.ErrUseLastResponse
+			}
+			if len(via) >= maxRedirects {
 				return errors.New("redirect limit reached")
 			}
 			_, err := checkURL(req.Context(), req.URL.String())

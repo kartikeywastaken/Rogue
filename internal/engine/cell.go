@@ -78,8 +78,8 @@ func (harness *Harness) run(parent context.Context, request Request, output chan
 			emit(Event{Kind: KindError, Err: err})
 		}
 	}
-	for _, profile := range operator.Profiles() {
-		if err = state.Comms.Join(profile.Callsign); err != nil {
+	for _, worker := range state.Cell.Snapshot() {
+		if err = state.Comms.Join(worker.ID); err != nil {
 			fail(err)
 			return
 		}

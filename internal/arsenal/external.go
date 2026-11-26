@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"rogue/internal/opsec"
 	"rogue/internal/target"
 )
 
@@ -46,6 +47,9 @@ func (buffer *limitedBuffer) Write(data []byte) (int, error) {
 }
 
 func (ProcessRunner) Run(parent context.Context, path string, arguments []string) ([]byte, error) {
+	if err := opsec.Sleep(parent); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 	output := &limitedBuffer{limit: 2 * 1024 * 1024, cancel: cancel}

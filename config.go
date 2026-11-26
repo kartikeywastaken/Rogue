@@ -39,8 +39,11 @@ func newRegistry() *arsenal.Registry {
 	arsenal.RegisterCVETool(registry, &arsenal.CVEClient{APIKey: os.Getenv("NVD_API_KEY")})
 	arsenal.RegisterResearchTools(registry)
 	arsenal.RegisterExtendedTools(registry, arsenal.ExternalOptions{NmapPath: os.Getenv("ROGUE_NMAP_PATH"), CurlPath: os.Getenv("ROGUE_CURL_PATH"), DigPath: os.Getenv("ROGUE_DIG_PATH")})
+	arsenal.RegisterActiveScannerTools(registry)
+	arsenal.RegisterMultiDomainTools(registry)
 	arsenal.RegisterWhiteboxTool(registry)
 	arsenal.RegisterCloudTools(registry)
+	arsenal.RegisterAIRedTeamTool(registry)
 	return registry
 }
 

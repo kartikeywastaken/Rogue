@@ -66,7 +66,7 @@ var scanner = Profile{
 	Archetype:    domain.ArchScanner,
 	Callsign:     "ARGUS",
 	Phase:        domain.PhaseRecon,
-	ToolCats:     []string{"recon", "web", "vuln", "auth", "util"},
+	ToolCats:     []string{"recon", "web", "vuln", "auth", "util", "cloud"},
 	SystemPrompt: "You are ARGUS, a vulnerability scanner in the ROGUE harness. You assess targets for security weaknesses, service fingerprinting, and configuration issues. Use the tools provided to scan systematically and report findings with severity and evidence.",
 }
 

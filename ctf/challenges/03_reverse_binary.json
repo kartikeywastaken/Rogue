@@ -1,0 +1,8 @@
+{
+  "name": "reverse-binary-triage",
+  "category": "reverse",
+  "description": "Inspect the target binary using binary_triage and strings_extract to identify ELF mitigations (NX/PIE/RELRO) and extract embedded flag strings.",
+  "expected_flag": "flag{static_elf_triage}",
+  "tags": ["reverse", "binary", "elf"],
+  "timeout_sec": 180
+}

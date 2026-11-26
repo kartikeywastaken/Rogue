@@ -1,0 +1,8 @@
+{
+  "name": "forensics-hex-carve",
+  "category": "forensics",
+  "description": "Inspect local artifact metadata and strings using exiftool_meta, file_identify, and xxd_dump to identify embedded evidence.",
+  "expected_flag": "flag{forensic_artifact_ok}",
+  "tags": ["forensics", "metadata"],
+  "timeout_sec": 180
+}

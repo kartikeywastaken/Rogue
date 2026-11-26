@@ -38,6 +38,10 @@ type Options struct {
 	OutputPrice    float64
 	Store          *storage.Store
 	OPSEC          opsec.Policy
+	OPSECProfile   string // named OPSEC profile: silent, covert, loud
+	RoEPreset      string // named RoE preset: strict, default
+	Team           string // named team factory: balanced, stealth, breach
+	Backtrack      bool   // enable alternate-approach backtracking hints on failed tool calls
 	Lab            bool
 }
 
@@ -83,6 +87,25 @@ func NewHarnessWithOptions(provider llm.Provider, registry *arsenal.Registry, mo
 	}
 	if options.Cooldown < 0 {
 		options.Cooldown = 0
+	}
+	if options.RoEPreset != "" {
+		if roe, ok := opsec.LookupRoE(options.RoEPreset); ok {
+			opsec.SetRoE(roe.Name)
+			if options.OPSECProfile == "" {
+				options.OPSECProfile = roe.OPSEC.Name
+			}
+		}
+	}
+	if options.OPSECProfile != "" {
+		if prof, ok := opsec.LookupProfile(options.OPSECProfile); ok {
+			opsec.SetProfile(prof.Name)
+			if options.OPSEC.PauseAfter == 0 && options.OPSEC.AbortAfter == 0 {
+				options.OPSEC = prof.Policy()
+			}
+			if options.Cooldown == 0 && prof.Cooldown > 0 {
+				options.Cooldown = prof.Cooldown
+			}
+		}
 	}
 	options.Rules.Scope = slices.Clone(options.Rules.Scope)
 	options.Rules.Excluded = slices.Clone(options.Rules.Excluded)
@@ -131,7 +154,13 @@ func (harness *Harness) prepare(request Request) (*RunState, func(), error) {
 			return nil, nil, err
 		}
 	}
-	state := &RunState{Control: control, Evidence: evidence.New(id), Comms: comms.New(id, "control"), Targets: target.New(id), Budget: budget, Cell: operator.NewCell(harness.opts.Concurrency, harness.opts.Cooldown), store: harness.opts.Store}
+	cell := operator.NewCell(harness.opts.Concurrency, harness.opts.Cooldown)
+	if harness.opts.Team != "" {
+		if comp, ok := operator.LookupTeam(harness.opts.Team); ok {
+			cell.ConfigureTeam(comp)
+		}
+	}
+	state := &RunState{Control: control, Evidence: evidence.New(id), Comms: comms.New(id, "control"), Targets: target.New(id), Budget: budget, Cell: cell, store: harness.opts.Store}
 	state.OPSEC = opsec.New(harness.opts.OPSEC)
 	harness.mu.Lock()
 	harness.last = state

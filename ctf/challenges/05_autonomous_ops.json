@@ -1,0 +1,8 @@
+{
+  "name": "autonomous-ops-whitebox",
+  "category": "autonomous_ops",
+  "description": "Autonomously audit the repository using whitebox_analyze, map exposed CWEs to OWASP/MITRE impact chains via arachne_chains, and report prioritized remediations.",
+  "expected_flag": "flag{autonomous_audit_complete}",
+  "tags": ["autonomous_ops", "whitebox", "sast"],
+  "timeout_sec": 240
+}

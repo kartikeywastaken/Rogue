@@ -191,13 +191,24 @@ func validateArgs(raw json.RawMessage, schema map[string]any) error {
 		if !ok {
 			return fmt.Errorf("unknown argument %q", key)
 		}
-		if prop["type"] == "string" {
+		switch prop["type"] {
+		case "string":
 			var s string
 			if string(value) == "null" || json.Unmarshal(value, &s) != nil {
 				return fmt.Errorf("argument %q must be a string", key)
 			}
 			if options := stringValues(prop["enum"]); len(options) > 0 && !slices.Contains(options, s) {
 				return fmt.Errorf("invalid value for %q", key)
+			}
+		case "boolean":
+			var b bool
+			if string(value) == "null" || json.Unmarshal(value, &b) != nil {
+				return fmt.Errorf("argument %q must be a boolean", key)
+			}
+		case "integer":
+			var n int
+			if string(value) == "null" || json.Unmarshal(value, &n) != nil {
+				return fmt.Errorf("argument %q must be an integer", key)
 			}
 		}
 	}

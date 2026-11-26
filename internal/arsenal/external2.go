@@ -1,12 +1,12 @@
 package arsenal
 
-// extended2.go — Phase 2 external CLI wrappers.
-// Follows the exact Tool pattern from external.go:
-//   - Description, Parameters (JSON Schema), Execute func(ctx, json.RawMessage)(*Result,error)
+// external2.go — Phase 2 external CLI wrappers & crypto_hash utility.
+// All external tools use ProcessRunner:
 //   - Env stripped to PATH, LANG, LC_ALL
-//   - stdout capped at 2 MiB via ProcessRunner
-//   - Network tools call checkURL or checkHost before execution
-//   - Lab-only tools call labURL (requires ROGUE_LAB=true + loopback IP)
+//   - stdout capped at 2 MiB, stderr capped at 16 KiB
+//   - OPSEC jitter applied automatically via ProcessRunner.Run
+//   - Explicit []string arguments (no shell interpolation, leading '-' rejected)
+//   - Network tools validate scope via checkURL / checkHost / scopedAddress / labURL
 
 import (
 	"context"
@@ -16,32 +16,108 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
-	"unicode"
 )
 
-// RegisterExtendedTools adds Phase 2 external CLI wrappers to the registry.
+// RegisterExtendedTools adds Phase 2 external CLI wrappers and crypto_hash to registry.
 func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 	runner := options.Runner
 	if runner == nil {
 		runner = ProcessRunner{}
 	}
 
-	// ── dirb ─────────────────────────────────────────────────────────────────
-	registry.Register(&Tool{
+	registry.Register(dirbTool(runner))
+	registry.Register(ffufTool(runner))
+	registry.Register(gobusterTool(runner))
+	registry.Register(wfuzzTool(runner))
+	registry.Register(niktoTool(runner))
+	registry.Register(sqlmapTool(runner))
+	registry.Register(hydraTool(runner))
+	registry.Register(hostLookupTool(runner))
+	registry.Register(whoisCLITool(runner))
+	registry.Register(wgetFetchTool(runner))
+	registry.Register(opensslScanTool(runner))
+	registry.Register(xxdDumpTool(runner))
+	registry.Register(stringsExtractTool(runner))
+	registry.Register(fileIdentifyTool(runner))
+	registry.Register(exiftoolMetaTool(runner))
+	registry.Register(binwalkAnalyzeTool(runner))
+	registry.Register(cryptoHashTool())
+}
+
+// ── shared helpers ────────────────────────────────────────────────────────────
+
+func validateSimpleFlagValue(val, field string) error {
+	if val == "" {
+		return nil
+	}
+	if strings.HasPrefix(val, "-") || strings.ContainsAny(val, " \r\n\t;|&`$") {
+		return fmt.Errorf("invalid %s", field)
+	}
+	return nil
+}
+
+func validateNumericList(val, field string) error {
+	for _, part := range strings.Split(val, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 100 || n > 599 {
+			return fmt.Errorf("invalid status code %q in %s", part, field)
+		}
+	}
+	return nil
+}
+
+func boundedIntString(raw, field string, minVal, maxVal, defVal int) (string, error) {
+	if raw == "" {
+		return strconv.Itoa(defVal), nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < minVal || n > maxVal {
+		return "", fmt.Errorf("%s must be an integer between %d and %d", field, minVal, maxVal)
+	}
+	return strconv.Itoa(n), nil
+}
+
+// runToolCLI executes a CLI binary via runner and only suppresses non-zero
+// exit codes when ctx is healthy and stdout/stderr limit was not exceeded.
+func runToolCLI(ctx context.Context, runner Runner, bin string, args []string) ([]byte, error) {
+	out, err := runner.Run(ctx, bin, args)
+	if err != nil {
+		if ctx.Err() != nil {
+			return out, err
+		}
+		msg := err.Error()
+		// Preserve structured failure for output limit or execution errors;
+		// allow exit-status non-zero when usable stdout was captured.
+		if strings.Contains(msg, "exit status") && len(out) > 0 && !strings.Contains(msg, "capture limit") {
+			return out, nil
+		}
+		return out, err
+	}
+	return out, nil
+}
+
+// ── web enumeration & fuzzing ─────────────────────────────────────────────────
+
+func dirbTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "dirb_scan",
 		Category:    "web",
 		Description: "Directory brute-force with dirb. URL must be in mission scope.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"target_url": map[string]any{"type": "string", "description": "URL to scan"},
-			"wordlist":   map[string]any{"type": "string", "description": "(optional) wordlist path"},
-		}, "required": []string{"target_url"}},
-		Available: func() error { _, err := executable("dirb", ""); return err },
+		Parameters:  stringSchema([]string{"target_url"}, "target_url", "wordlist"),
+		Available:   func() error { _, err := executable("dirb", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				TargetURL string `json:"target_url"`
@@ -57,26 +133,31 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err != nil {
 				return fail(err)
 			}
-			args := []string{a.TargetURL, "-o", "/dev/stdout", "-r", "-S"}
+			args := []string{a.TargetURL}
 			if a.Wordlist != "" {
-				args = []string{a.TargetURL, a.Wordlist, "-o", "/dev/stdout", "-r", "-S"}
+				wl, _, err := regularFileCheck(a.Wordlist, 32*1024*1024)
+				if err != nil {
+					return fail(fmt.Errorf("dirb_scan wordlist: %w", err))
+				}
+				args = append(args, wl)
 			}
-			out, _ := runner.Run(ctx, path, args)
-			return ok(map[string]any{"raw": string(out)}), nil
+			args = append(args, "-r", "-S")
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("dirb scan completed on %s (%d bytes)", a.TargetURL, len(out)), Data: map[string]any{"raw": string(out)}, Artifact: out, ArtifactType: "text/plain"}, nil
 		},
-	})
+	}
+}
 
-	// ── ffuf ─────────────────────────────────────────────────────────────────
-	registry.Register(&Tool{
+func ffufTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "ffuf_scan",
 		Category:    "web",
 		Description: "Fast web fuzzer. target_url must contain FUZZ. URL must be in scope.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"target_url":  map[string]any{"type": "string", "description": "URL with FUZZ placeholder"},
-			"wordlist":    map[string]any{"type": "string", "description": "wordlist path"},
-			"hide_status": map[string]any{"type": "string", "description": "comma-separated status codes to hide e.g. 404"},
-		}, "required": []string{"target_url", "wordlist"}},
-		Available: func() error { _, err := executable("ffuf", ""); return err },
+		Parameters:  stringSchema([]string{"target_url", "wordlist"}, "target_url", "wordlist", "hide_status"),
+		Available:   func() error { _, err := executable("ffuf", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				TargetURL  string `json:"target_url"`
@@ -86,34 +167,46 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
+			if !strings.Contains(a.TargetURL, "FUZZ") {
+				return fail(errors.New("ffuf_scan: target_url must contain FUZZ placeholder"))
+			}
 			scopeURL := strings.ReplaceAll(a.TargetURL, "FUZZ", "index")
 			if _, err := checkURL(ctx, scopeURL); err != nil {
 				return fail(fmt.Errorf("ffuf_scan: %w", err))
+			}
+			wl, _, err := regularFileCheck(a.Wordlist, 32*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("ffuf_scan wordlist: %w", err))
+			}
+			if a.HideStatus != "" {
+				if err := validateNumericList(a.HideStatus, "hide_status"); err != nil {
+					return fail(err)
+				}
 			}
 			path, err := executable("ffuf", "")
 			if err != nil {
 				return fail(err)
 			}
-			args := []string{"-u", a.TargetURL, "-w", a.Wordlist, "-o", "/dev/stdout", "-of", "json", "-s"}
+			args := []string{"-u", a.TargetURL, "-w", wl, "-of", "json", "-s"}
 			if a.HideStatus != "" {
 				args = append(args, "-fc", a.HideStatus)
 			}
-			out, _ := runner.Run(ctx, path, args)
-			return ok(map[string]any{"raw": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("ffuf fuzzing completed on %s (%d bytes)", a.TargetURL, len(out)), Data: map[string]any{"raw": string(out)}, Artifact: out, ArtifactType: "application/json"}, nil
 		},
-	})
+	}
+}
 
-	// ── gobuster ──────────────────────────────────────────────────────────────
-	registry.Register(&Tool{
+func gobusterTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "gobuster_scan",
 		Category:    "web",
 		Description: "Directory/file enumeration with gobuster. URL must be in scope.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"target_url": map[string]any{"type": "string", "description": "URL to scan"},
-			"wordlist":   map[string]any{"type": "string", "description": "wordlist path"},
-			"extensions": map[string]any{"type": "string", "description": "file extensions e.g. php,html"},
-		}, "required": []string{"target_url", "wordlist"}},
-		Available: func() error { _, err := executable("gobuster", ""); return err },
+		Parameters:  stringSchema([]string{"target_url", "wordlist"}, "target_url", "wordlist", "extensions"),
+		Available:   func() error { _, err := executable("gobuster", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				TargetURL  string `json:"target_url"`
@@ -126,29 +219,86 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if _, err := checkURL(ctx, a.TargetURL); err != nil {
 				return fail(fmt.Errorf("gobuster_scan: %w", err))
 			}
+			wl, _, err := regularFileCheck(a.Wordlist, 32*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("gobuster_scan wordlist: %w", err))
+			}
+			if err := validateSimpleFlagValue(a.Extensions, "extensions"); err != nil {
+				return fail(err)
+			}
 			path, err := executable("gobuster", "")
 			if err != nil {
 				return fail(err)
 			}
-			args := []string{"dir", "-u", a.TargetURL, "-w", a.Wordlist, "-q", "--no-progress"}
+			args := []string{"dir", "-u", a.TargetURL, "-w", wl, "-q", "--no-progress"}
 			if a.Extensions != "" {
 				args = append(args, "-x", a.Extensions)
 			}
-			out, _ := runner.Run(ctx, path, args)
-			return ok(map[string]any{"raw": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("gobuster scan completed on %s (%d bytes)", a.TargetURL, len(out)), Data: map[string]any{"raw": string(out)}, Artifact: out, ArtifactType: "text/plain"}, nil
 		},
-	})
+	}
+}
 
-	// ── nikto ────────────────────────────────────────────────────────────────
-	registry.Register(&Tool{
+func wfuzzTool(runner Runner) *Tool {
+	return &Tool{
+		Name:        "wfuzz_scan",
+		Category:    "web",
+		Description: "Web parameter/path fuzzer using wfuzz. target_url must contain FUZZ placeholder and be in mission scope.",
+		Parameters:  stringSchema([]string{"target_url", "wordlist"}, "target_url", "wordlist", "hide_codes"),
+		Available:   func() error { _, err := executable("wfuzz", ""); return err },
+		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
+			var a struct {
+				TargetURL string `json:"target_url"`
+				Wordlist  string `json:"wordlist"`
+				HideCodes string `json:"hide_codes"`
+			}
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, err
+			}
+			if !strings.Contains(a.TargetURL, "FUZZ") {
+				return fail(errors.New("wfuzz_scan: target_url must contain FUZZ placeholder"))
+			}
+			if _, err := checkURL(ctx, strings.ReplaceAll(a.TargetURL, "FUZZ", "test")); err != nil {
+				return fail(fmt.Errorf("wfuzz_scan: %w", err))
+			}
+			wl, _, err := regularFileCheck(a.Wordlist, 32*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("wfuzz_scan wordlist: %w", err))
+			}
+			hide := "404"
+			if a.HideCodes != "" {
+				if err := validateNumericList(a.HideCodes, "hide_codes"); err != nil {
+					return fail(err)
+				}
+				hide = a.HideCodes
+			}
+			path, err := executable("wfuzz", "")
+			if err != nil {
+				return fail(err)
+			}
+			args := []string{"-z", "file," + wl, "--hc", hide, a.TargetURL}
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("wfuzz scan completed on %s (%d bytes)", a.TargetURL, len(out)), Data: map[string]any{"raw": string(out)}, Artifact: out, ArtifactType: "text/plain"}, nil
+		},
+	}
+}
+
+// ── vulnerability scanners ───────────────────────────────────────────────────
+
+func niktoTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "nikto_scan",
 		Category:    "vuln",
-		Description: "Nikto web server vulnerability scanner. Host must be in mission scope.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"host": map[string]any{"type": "string", "description": "target hostname or IP"},
-			"port": map[string]any{"type": "string", "description": "(optional) port number"},
-		}, "required": []string{"host"}},
-		Available: func() error { _, err := executable("nikto", ""); return err },
+		Description: "Nikto web server vulnerability scanner. Host and port must be in mission scope.",
+		Parameters:  stringSchema([]string{"host"}, "host", "port"),
+		Available:   func() error { _, err := executable("nikto", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				Host string `json:"host"`
@@ -157,34 +307,45 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
-			if err := checkHost(ctx, a.Host); err != nil {
+			if err := validateSimpleFlagValue(a.Host, "host"); err != nil {
+				return fail(err)
+			}
+			address, err := scopedAddress(ctx, a.Host)
+			if err != nil {
+				return fail(fmt.Errorf("nikto_scan: %w", err))
+			}
+			port := a.Port
+			if port == "" {
+				port = "80"
+			}
+			if !validPort(port) {
+				return fail(errors.New("nikto_scan: port must be 1–65535"))
+			}
+			if err := checkPort(ctx, port); err != nil {
 				return fail(fmt.Errorf("nikto_scan: %w", err))
 			}
 			path, err := executable("nikto", "")
 			if err != nil {
 				return fail(err)
 			}
-			args := []string{"-h", a.Host, "-Format", "txt", "-nointeractive", "-Tuning", "123457890abc"}
-			if a.Port != "" {
-				args = append(args, "-port", a.Port)
+			args := []string{"-h", address, "-vhost", a.Host, "-port", port, "-Format", "txt", "-nointeractive", "-Tuning", "123457890abc"}
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
 			}
-			out, _ := runner.Run(ctx, path, args)
-			return ok(map[string]any{"raw": string(out)}), nil
+			return &Result{Success: true, Summary: fmt.Sprintf("nikto scan completed on %s:%s (%d bytes)", a.Host, port, len(out)), Data: map[string]any{"host": a.Host, "address": address, "port": port, "raw": string(out)}, Artifact: out, ArtifactType: "text/plain"}, nil
 		},
-	})
+	}
+}
 
-	// ── sqlmap (lab only) ─────────────────────────────────────────────────────
-	registry.Register(&Tool{
+func sqlmapTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "sqlmap_probe",
 		Category:    "vuln",
 		LabOnly:     true,
-		Description: "SQLMap injection probe. Lab-only: requires ROGUE_LAB=true and loopback target.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"target_url": map[string]any{"type": "string", "description": "URL to probe (must be loopback)"},
-			"level":      map[string]any{"type": "string", "description": "1-5 (default 1)"},
-			"risk":       map[string]any{"type": "string", "description": "1-3 (default 1)"},
-		}, "required": []string{"target_url"}},
-		Available: func() error { _, err := executable("sqlmap", ""); return err },
+		Description: "SQLMap injection probe. Lab-only: requires ROGUE_LAB=true, loopback target, and exact-action approval.",
+		Parameters:  stringSchema([]string{"target_url"}, "target_url", "level", "risk"),
+		Available:   func() error { _, err := executable("sqlmap", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				TargetURL string `json:"target_url"`
@@ -197,37 +358,49 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if _, err := labURL(ctx, a.TargetURL); err != nil {
 				return fail(fmt.Errorf("sqlmap_probe: %w", err))
 			}
+			level, err := boundedIntString(a.Level, "level", 1, 5, 1)
+			if err != nil {
+				return fail(err)
+			}
+			risk, err := boundedIntString(a.Risk, "risk", 1, 3, 1)
+			if err != nil {
+				return fail(err)
+			}
 			path, err := executable("sqlmap", "")
 			if err != nil {
 				return fail(err)
 			}
-			level, risk := "1", "1"
-			if a.Level != "" {
-				level = a.Level
+			tmpDir, err := os.MkdirTemp("", "rogue-sqlmap-*")
+			if err != nil {
+				return fail(err)
 			}
-			if a.Risk != "" {
-				risk = a.Risk
+			defer os.RemoveAll(tmpDir)
+			args := []string{"-u", a.TargetURL, "--batch", "--level=" + level, "--risk=" + risk, "--output-dir=" + tmpDir}
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
 			}
-			args := []string{"-u", a.TargetURL, "--batch", "--level=" + level, "--risk=" + risk, "--output-dir=/tmp/rogue-sqlmap"}
-			out, _ := runner.Run(ctx, path, args)
-			return ok(map[string]any{"raw": string(out)}), nil
+			return &Result{Success: true, Summary: fmt.Sprintf("sqlmap probe completed on %s (level %s, risk %s)", a.TargetURL, level, risk), Data: map[string]any{"raw": string(out)}, Artifact: out, ArtifactType: "text/plain"}, nil
 		},
-	})
+	}
+}
 
-	// ── hydra (lab only) ─────────────────────────────────────────────────────
-	registry.Register(&Tool{
-		Name:        "hydra_probe",
-		Category:    "auth",
-		LabOnly:     true,
-		Description: "Hydra credential probe. Lab-only: requires ROGUE_LAB=true and loopback target.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"service": map[string]any{"type": "string", "description": "protocol e.g. http-post-form, ssh, ftp"},
-			"host":    map[string]any{"type": "string", "description": "loopback host"},
-			"user":    map[string]any{"type": "string", "description": "username"},
-			"pass":    map[string]any{"type": "string", "description": "password"},
-		}, "required": []string{"service", "host", "user", "pass"}},
-		Available:     func() error { _, err := executable("hydra", ""); return err },
+// ── auth ──────────────────────────────────────────────────────────────────────
+
+var allowedHydraServices = map[string]bool{
+	"ssh": true, "ftp": true, "smtp": true, "mysql": true, "postgres": true,
+	"redis": true, "smb": true, "http-get": true, "http-post-form": true, "http-get-form": true,
+}
+
+func hydraTool(runner Runner) *Tool {
+	return &Tool{
+		Name:          "hydra_probe",
+		Category:      "auth",
+		LabOnly:       true,
 		SensitiveArgs: []string{"pass"},
+		Description:   "Hydra credential probe. Lab-only: requires ROGUE_LAB=true, loopback target, and exact-action approval.",
+		Parameters:    stringSchema([]string{"service", "host", "user", "pass"}, "service", "host", "user", "pass"),
+		Available:     func() error { _, err := executable("hydra", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				Service string `json:"service"`
@@ -238,28 +411,44 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
-			if _, err := labURL(ctx, "http://"+a.Host); err != nil {
+			if !allowedHydraServices[strings.ToLower(a.Service)] {
+				return fail(fmt.Errorf("hydra_probe: unsupported service %q", a.Service))
+			}
+			if err := validateSimpleFlagValue(a.Host, "host"); err != nil {
+				return fail(err)
+			}
+			if err := validateSimpleFlagValue(a.User, "user"); err != nil {
+				return fail(err)
+			}
+			host := a.Host
+			if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+				host = "[" + host + "]"
+			}
+			if _, err := labURL(ctx, "http://"+host); err != nil {
 				return fail(fmt.Errorf("hydra_probe: %w", err))
 			}
 			path, err := executable("hydra", "")
 			if err != nil {
 				return fail(err)
 			}
-			out, _ := runner.Run(ctx, path, []string{"-l", a.User, "-p", a.Pass, a.Host, a.Service})
-			return ok(map[string]any{"raw": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, path, []string{"-l", a.User, "-p", a.Pass, "-I", "-t", "1", a.Host, strings.ToLower(a.Service)})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("hydra check finished for %s@%s (%s)", a.User, a.Host, a.Service), Data: map[string]any{"raw": string(out)}, Artifact: out, ArtifactType: "text/plain"}, nil
 		},
-	})
+	}
+}
 
-	// ── host lookup ───────────────────────────────────────────────────────────
-	registry.Register(&Tool{
+// ── recon / network ──────────────────────────────────────────────────────────
+
+func hostLookupTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "host_lookup",
 		Category:    "recon",
 		Description: "DNS record lookup via the host command. Host must be in scope.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"hostname": map[string]any{"type": "string", "description": "target hostname"},
-			"type":     map[string]any{"type": "string", "description": "record type: A, AAAA, MX, NS, TXT, CNAME (default A)"},
-		}, "required": []string{"hostname"}},
-		Available: func() error { _, err := executable("host", ""); return err },
+		Parameters:  stringSchema([]string{"hostname"}, "hostname", "type"),
+		Available:   func() error { _, err := executable("host", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				Hostname string `json:"hostname"`
@@ -267,6 +456,9 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			}
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
+			}
+			if err := validateSimpleFlagValue(a.Hostname, "hostname"); err != nil {
+				return fail(err)
 			}
 			if err := checkHost(ctx, a.Hostname); err != nil {
 				return fail(fmt.Errorf("host_lookup: %w", err))
@@ -283,16 +475,56 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err != nil {
 				return fail(err)
 			}
-			out, _ := runner.Run(ctx, path, []string{"-t", recType, a.Hostname})
-			return ok(map[string]any{"raw": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, path, []string{"-t", recType, a.Hostname})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("host -t %s %s completed", recType, a.Hostname), Data: map[string]any{"hostname": a.Hostname, "type": recType, "raw": string(out)}}, nil
 		},
-	})
+	}
+}
 
-	// ── wget fetch ───────────────────────────────────────────────────────────
-	registry.Register(&Tool{
+func whoisCLITool(runner Runner) *Tool {
+	return &Tool{
+		Name:        "whois_cli",
+		Category:    "recon",
+		Description: "Query system whois CLI (follows registry referrals) for one domain name in scope.",
+		Parameters:  stringSchema([]string{"host"}, "host"),
+		Available:   func() error { _, err := executable("whois", ""); return err },
+		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
+			var a struct {
+				Host string `json:"host"`
+			}
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return nil, err
+			}
+			if err := validateSimpleFlagValue(a.Host, "host"); err != nil {
+				return fail(err)
+			}
+			if len(a.Host) > 253 || strings.ContainsAny(a.Host, "\r\n /:@\\") {
+				return fail(errors.New("whois_cli: host must be a valid domain or IP"))
+			}
+			if err := checkHost(ctx, a.Host); err != nil {
+				return fail(fmt.Errorf("whois_cli: %w", err))
+			}
+			path, err := executable("whois", "")
+			if err != nil {
+				return fail(err)
+			}
+			out, err := runToolCLI(ctx, runner, path, []string{a.Host})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("whois CLI query completed for %s (%d bytes)", a.Host, len(out)), Data: map[string]any{"host": a.Host, "raw": string(out)}, Artifact: out, ArtifactType: "text/plain"}, nil
+		},
+	}
+}
+
+func wgetFetchTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "wget_fetch",
 		Category:    "recon",
-		Description: "Fetch a URL with wget. Output is captured, not written to disk. Scope enforced.",
+		Description: "Fetch a URL with wget. Output is captured up to 2 MiB, not saved to disk. Redirects disabled to preserve scope.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"url":          map[string]any{"type": "string", "description": "URL to fetch"},
 			"headers_only": map[string]any{"type": "boolean", "description": "true to fetch headers only"},
@@ -306,32 +538,47 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
-			if _, err := checkURL(ctx, a.URL); err != nil {
+			parsed, err := checkURL(ctx, a.URL)
+			if err != nil {
+				return fail(fmt.Errorf("wget_fetch: %w", err))
+			}
+			if _, err := scopedAddress(ctx, parsed.Hostname()); err != nil {
 				return fail(fmt.Errorf("wget_fetch: %w", err))
 			}
 			path, err := executable("wget", "")
 			if err != nil {
 				return fail(err)
 			}
-			args := []string{"-q", "-O", "-", "--timeout=15", "--tries=1", a.URL}
+			// Disable redirects to avoid off-scope jumps during CLI fetch.
+			args := []string{"-q", "-O", "-", "--max-redirect=0", "--timeout=15", "--tries=1", "--", parsed.String()}
 			if a.HeadersOnly {
-				args = []string{"-q", "--server-response", "--spider", "--timeout=15", a.URL}
+				args = []string{"-q", "--server-response", "--spider", "--max-redirect=0", "--timeout=15", "--", parsed.String()}
 			}
-			out, _ := runner.Run(ctx, path, args)
-			return ok(map[string]any{"raw": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, path, args)
+			if err != nil {
+				return fail(err)
+			}
+			if !urlSchemeSafe(parsed) {
+				return fail(errors.New("unsafe scheme"))
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("wget fetch completed on %s (%d bytes)", a.URL, len(out)), Data: map[string]any{"url": a.URL, "raw": string(out)}}, nil
 		},
-	})
+	}
+}
 
-	// ── openssl TLS scan ──────────────────────────────────────────────────────
-	registry.Register(&Tool{
+func urlSchemeSafe(u *url.URL) bool {
+	return u != nil && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+// ── TLS / SSL ────────────────────────────────────────────────────────────────
+
+func opensslScanTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "openssl_scan",
 		Category:    "vuln",
-		Description: "Enumerate TLS configuration and certificate info via openssl s_client. Host must be in scope.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"host": map[string]any{"type": "string", "description": "target hostname"},
-			"port": map[string]any{"type": "string", "description": "port (default 443)"},
-		}, "required": []string{"host"}},
-		Available: func() error { _, err := executable("openssl", ""); return err },
+		Description: "Inspect TLS connection details via openssl s_client using scoped IP pinning + SNI. Host must be in scope.",
+		Parameters:  stringSchema([]string{"host"}, "host", "port"),
+		Available:   func() error { _, err := executable("openssl", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				Host string `json:"host"`
@@ -340,56 +587,75 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
-			if err := checkHost(ctx, a.Host); err != nil {
+			if err := validateSimpleFlagValue(a.Host, "host"); err != nil {
+				return fail(err)
+			}
+			address, err := scopedAddress(ctx, a.Host)
+			if err != nil {
 				return fail(fmt.Errorf("openssl_scan: %w", err))
 			}
-			port := "443"
-			if a.Port != "" {
-				port = a.Port
+			port := a.Port
+			if port == "" {
+				port = "443"
+			}
+			if !validPort(port) {
+				return fail(errors.New("openssl_scan: port must be 1–65535"))
+			}
+			if err := checkPort(ctx, port); err != nil {
+				return fail(fmt.Errorf("openssl_scan: %w", err))
 			}
 			path, err := executable("openssl", "")
 			if err != nil {
 				return fail(err)
 			}
-			addr := a.Host + ":" + port
-			out, _ := runner.Run(ctx, path, []string{"s_client", "-connect", addr, "-brief"})
-			return ok(map[string]any{"raw": string(out), "addr": addr}), nil
+			addr := net.JoinHostPort(address, port)
+			out, err := runToolCLI(ctx, runner, path, []string{"s_client", "-connect", addr, "-servername", a.Host, "-brief"})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("openssl s_client inspection completed for %s:%s", a.Host, port), Data: map[string]any{"host": a.Host, "address": address, "port": port, "raw": string(out)}}, nil
 		},
-	})
+	}
+}
 
-	// ── forensics / binary utilities ─────────────────────────────────────────
+// ── forensics / binary CLI wrappers ──────────────────────────────────────────
 
-	registry.Register(&Tool{
+func xxdDumpTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "xxd_dump",
 		Category:    "util",
-		Description: "Hex dump of a local file (first 4096 bytes).",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "absolute path to the file"},
-		}, "required": []string{"path"}},
-		Available: func() error { _, err := executable("xxd", ""); return err },
+		Description: "Hex dump of a local regular file (first 4096 bytes).",
+		Parameters:  stringSchema([]string{"path"}, "path"),
+		Available:   func() error { _, err := executable("xxd", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct{ Path string `json:"path"` }
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
+			clean, _, err := regularFileCheck(a.Path, 64*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("xxd_dump: %w", err))
+			}
 			p, err := executable("xxd", "")
 			if err != nil {
 				return fail(err)
 			}
-			out, _ := runner.Run(ctx, p, []string{"-l", "4096", a.Path})
-			return ok(map[string]any{"hex_dump": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, p, []string{"-l", "4096", clean})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("Hex dump of %s (%d bytes output)", filepath.Base(clean), len(out)), Data: map[string]any{"hex_dump": string(out)}}, nil
 		},
-	})
+	}
+}
 
-	registry.Register(&Tool{
+func stringsExtractTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "strings_extract",
 		Category:    "util",
-		Description: "Extract printable strings from a local binary file.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"path":    map[string]any{"type": "string", "description": "absolute path to the file"},
-			"min_len": map[string]any{"type": "string", "description": "minimum string length (default 4)"},
-		}, "required": []string{"path"}},
-		Available: func() error { _, err := executable("strings", ""); return err },
+		Description: "Extract printable strings from a local regular binary file.",
+		Parameters:  stringSchema([]string{"path"}, "path", "min_len"),
+		Available:   func() error { _, err := executable("strings", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				Path   string `json:"path"`
@@ -398,94 +664,123 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
-			minLen := "4"
-			if a.MinLen != "" {
-				minLen = a.MinLen
+			clean, _, err := regularFileCheck(a.Path, 64*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("strings_extract: %w", err))
+			}
+			minLen, err := boundedIntString(a.MinLen, "min_len", 2, 64, 4)
+			if err != nil {
+				return fail(err)
 			}
 			p, err := executable("strings", "")
 			if err != nil {
 				return fail(err)
 			}
-			out, _ := runner.Run(ctx, p, []string{"-n", minLen, a.Path})
-			return ok(map[string]any{"strings": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, p, []string{"-n", minLen, clean})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("Extracted strings (min %s) from %s (%d bytes)", minLen, filepath.Base(clean), len(out)), Data: map[string]any{"strings": string(out)}}, nil
 		},
-	})
+	}
+}
 
-	registry.Register(&Tool{
+func fileIdentifyTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "file_identify",
 		Category:    "util",
 		Description: "Identify file type using the file command.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "absolute path to the file"},
-		}, "required": []string{"path"}},
-		Available: func() error { _, err := executable("file", ""); return err },
+		Parameters:  stringSchema([]string{"path"}, "path"),
+		Available:   func() error { _, err := executable("file", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct{ Path string `json:"path"` }
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
+			}
+			clean, _, err := regularFileCheck(a.Path, 256*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("file_identify: %w", err))
 			}
 			p, err := executable("file", "")
 			if err != nil {
 				return fail(err)
 			}
-			out, _ := runner.Run(ctx, p, []string{"-b", "-z", a.Path})
-			return ok(map[string]any{"file_type": strings.TrimSpace(string(out))}), nil
+			out, err := runToolCLI(ctx, runner, p, []string{"-b", "-z", clean})
+			if err != nil {
+				return fail(err)
+			}
+			ft := strings.TrimSpace(string(out))
+			return &Result{Success: true, Summary: fmt.Sprintf("%s: %s", filepath.Base(clean), ft), Data: map[string]any{"file_type": ft}}, nil
 		},
-	})
+	}
+}
 
-	registry.Register(&Tool{
+func exiftoolMetaTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "exiftool_meta",
 		Category:    "util",
 		Description: "Extract metadata from a local file using exiftool.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "absolute path to the file"},
-		}, "required": []string{"path"}},
-		Available: func() error { _, err := executable("exiftool", ""); return err },
+		Parameters:  stringSchema([]string{"path"}, "path"),
+		Available:   func() error { _, err := executable("exiftool", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct{ Path string `json:"path"` }
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
+			}
+			clean, _, err := regularFileCheck(a.Path, 128*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("exiftool_meta: %w", err))
 			}
 			p, err := executable("exiftool", "")
 			if err != nil {
 				return fail(err)
 			}
-			out, _ := runner.Run(ctx, p, []string{"-j", a.Path})
-			return ok(map[string]any{"metadata": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, p, []string{"-j", clean})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("Extracted metadata for %s (%d bytes)", filepath.Base(clean), len(out)), Data: map[string]any{"metadata": string(out)}}, nil
 		},
-	})
+	}
+}
 
-	registry.Register(&Tool{
+func binwalkAnalyzeTool(runner Runner) *Tool {
+	return &Tool{
 		Name:        "binwalk_analyze",
 		Category:    "util",
-		Description: "Scan a binary for embedded files and executable code using binwalk.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "absolute path to the file"},
-		}, "required": []string{"path"}},
-		Available: func() error { _, err := executable("binwalk", ""); return err },
+		Description: "Scan a regular binary for embedded files and executable signatures using binwalk.",
+		Parameters:  stringSchema([]string{"path"}, "path"),
+		Available:   func() error { _, err := executable("binwalk", ""); return err },
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct{ Path string `json:"path"` }
 			if err := json.Unmarshal(raw, &a); err != nil {
 				return nil, err
 			}
+			clean, _, err := regularFileCheck(a.Path, 128*1024*1024)
+			if err != nil {
+				return fail(fmt.Errorf("binwalk_analyze: %w", err))
+			}
 			p, err := executable("binwalk", "")
 			if err != nil {
 				return fail(err)
 			}
-			out, _ := runner.Run(ctx, p, []string{"--signature", "--entropy", a.Path})
-			return ok(map[string]any{"raw": string(out)}), nil
+			out, err := runToolCLI(ctx, runner, p, []string{"--signature", "--entropy", clean})
+			if err != nil {
+				return fail(err)
+			}
+			return &Result{Success: true, Summary: fmt.Sprintf("binwalk signature/entropy scan completed for %s", filepath.Base(clean)), Data: map[string]any{"raw": string(out)}}, nil
 		},
-	})
+	}
+}
 
-	// ── crypto_hash — pure Go ─────────────────────────────────────────────────
-	registry.Register(&Tool{
+// ── pure-Go crypto_hash ──────────────────────────────────────────────────────
+
+func cryptoHashTool() *Tool {
+	return &Tool{
 		Name:        "crypto_hash",
 		Category:    "util",
-		Description: "Compute MD5, SHA-1, SHA-256, and SHA-512 of a local file or inline data.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "file path (mutually exclusive with data)"},
-			"data": map[string]any{"type": "string", "description": "inline string data (mutually exclusive with path)"},
-		}},
+		Description: "Compute MD5, SHA-1, SHA-256, and SHA-512 digests of a local regular file (up to 10 MiB) or inline data.",
+		Parameters:  stringSchema(nil, "path", "data"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var a struct {
 				Path string `json:"path"`
@@ -497,7 +792,11 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			var r io.Reader
 			switch {
 			case a.Path != "":
-				f, err := os.Open(filepath.Clean(a.Path))
+				clean, _, err := regularFileCheck(a.Path, 10*1024*1024)
+				if err != nil {
+					return fail(fmt.Errorf("crypto_hash: %w", err))
+				}
+				f, err := os.Open(clean)
 				if err != nil {
 					return fail(err)
 				}
@@ -506,7 +805,7 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			case a.Data != "":
 				r = strings.NewReader(a.Data)
 			default:
-				return fail(fmt.Errorf("crypto_hash: provide path or data"))
+				return fail(errors.New("crypto_hash: provide path or data"))
 			}
 			b, err := io.ReadAll(io.LimitReader(r, 10*1024*1024))
 			if err != nil {
@@ -516,104 +815,20 @@ func RegisterExtendedTools(registry *Registry, options ExternalOptions) {
 			sha1h := sha1.Sum(b) //nolint:gosec
 			sha256h := sha256.Sum256(b)
 			sha512h := sha512.Sum512(b)
-			return ok(map[string]any{
-				"md5":    hex.EncodeToString(md5h[:]),
-				"sha1":   hex.EncodeToString(sha1h[:]),
-				"sha256": hex.EncodeToString(sha256h[:]),
-				"sha512": hex.EncodeToString(sha512h[:]),
-				"bytes":  len(b),
-			}), nil
+			sha256Hex := hex.EncodeToString(sha256h[:])
+			return &Result{
+				Success: true,
+				Summary: fmt.Sprintf("Digests computed for %d bytes (sha256 %s...)", len(b), sha256Hex[:12]),
+				Data: map[string]any{
+					"md5":    hex.EncodeToString(md5h[:]),
+					"sha1":   hex.EncodeToString(sha1h[:]),
+					"sha256": sha256Hex,
+					"sha512": hex.EncodeToString(sha512h[:]),
+					"bytes":  len(b),
+				},
+			}, nil
 		},
-	})
-
-	// ── solidity_audit — pure Go static analysis ──────────────────────────────
-	registry.Register(&Tool{
-		Name:        "solidity_audit",
-		Category:    "util",
-		Description: "Static regex audit of Solidity source for common vulnerability patterns. Operates on a local file path or inline code. Analysis only.",
-		Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "path to .sol file"},
-			"code": map[string]any{"type": "string", "description": "inline Solidity source"},
-		}},
-		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
-			var a struct {
-				Path string `json:"path"`
-				Code string `json:"code"`
-			}
-			if err := json.Unmarshal(raw, &a); err != nil {
-				return nil, err
-			}
-			var src string
-			switch {
-			case a.Path != "":
-				b, err := os.ReadFile(filepath.Clean(a.Path))
-				if err != nil {
-					return fail(err)
-				}
-				src = string(b)
-			case a.Code != "":
-				src = a.Code
-			default:
-				return fail(fmt.Errorf("solidity_audit: provide path or code"))
-			}
-			findings := solidityAnalyze(src)
-			return ok(map[string]any{
-				"total_findings": len(findings),
-				"findings":       findings,
-				"note":           "Static pattern analysis only — does not confirm exploitability. Manual review required.",
-			}), nil
-		},
-	})
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-func ok(data any) *Result  { return &Result{Success: true, Data: data} }
-func fail(err error) (*Result, error) { return nil, err }
-
-// ── Solidity static analysis ──────────────────────────────────────────────────
-
-type solidityFinding struct {
-	Rule    string `json:"rule"`
-	Detail  string `json:"detail"`
-	Line    int    `json:"line"`
-	Snippet string `json:"snippet"`
-}
-
-var solidityRules = []struct {
-	name    string
-	pattern *regexp.Regexp
-	detail  string
-}{
-	{"reentrancy", regexp.MustCompile(`(?i)call\s*\{`), "Potential reentrancy: external call before state update"},
-	{"tx_origin_auth", regexp.MustCompile(`\btx\.origin\b`), "tx.origin used for auth — use msg.sender instead"},
-	{"block_timestamp", regexp.MustCompile(`\bblock\.timestamp\b`), "block.timestamp dependence: miners can manipulate within ~15s"},
-	{"unchecked_call", regexp.MustCompile(`\.call\s*\(`), "Low-level .call() — return value must be checked"},
-	{"selfdestruct", regexp.MustCompile(`\bselfdestruct\b|\bsuicide\b`), "selfdestruct present — high-risk fund-drain vector"},
-	{"assembly", regexp.MustCompile(`\bassembly\b\s*\{`), "Inline assembly — requires careful review"},
-	{"hardcoded_addr", regexp.MustCompile(`0x[0-9a-fA-F]{40}`), "Hardcoded Ethereum address — verify intent"},
-	{"overflow_check", regexp.MustCompile(`\bunchecked\b\s*\{`), "unchecked block disables arithmetic overflow protection"},
-	{"delegatecall", regexp.MustCompile(`\.delegatecall\s*\(`), "delegatecall — storage layout must match"},
-}
-
-func solidityAnalyze(src string) []solidityFinding {
-	lines := strings.Split(src, "\n")
-	var findings []solidityFinding
-	for _, rule := range solidityRules {
-		for i, line := range lines {
-			if rule.pattern.MatchString(line) {
-				snippet := strings.TrimFunc(line, unicode.IsSpace)
-				if len(snippet) > 120 {
-					snippet = snippet[:120] + "..."
-				}
-				findings = append(findings, solidityFinding{
-					Rule:    rule.name,
-					Detail:  rule.detail,
-					Line:    i + 1,
-					Snippet: snippet,
-				})
-			}
-		}
 	}
-	return findings
 }
+
+func fail(err error) (*Result, error) { return nil, err }

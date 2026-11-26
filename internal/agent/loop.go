@@ -54,6 +54,7 @@ type Config struct {
 	OnTool         func(Execution) error
 	Lab            bool
 	BufferOutput   bool // internal handoffs publish only complete prose
+	Backtrack      bool // inject alternate-approach hint when a tool call fails
 }
 
 type Execution struct {
@@ -177,10 +178,10 @@ func validateCalls(calls []llm.ToolCall, seen map[string]bool) error {
 	return nil
 }
 
-func (loop *Loop) execute(ctx context.Context, config Config, call llm.ToolCall, emit func(Event) bool) (llm.Message, error) {
+func (loop *Loop) execute(ctx context.Context, config Config, call llm.ToolCall, emit func(Event) bool) (llm.Message, bool, error) {
 	operation, finish, err := begin(ctx, config.Runtime)
 	if err != nil {
-		return llm.Message{}, err
+		return llm.Message{}, false, err
 	}
 	defer finish()
 	input := call.Function.Arguments
@@ -202,13 +203,13 @@ func (loop *Loop) execute(ctx context.Context, config Config, call llm.ToolCall,
 	}
 	info := ToolInfo{ID: call.ID, Name: call.Function.Name, Input: input}
 	if !emit(Event{Kind: KindToolStart, Tool: info}) {
-		return llm.Message{}, ctx.Err()
+		return llm.Message{}, false, ctx.Err()
 	}
 	if config.OnStart != nil {
 		// Write the intent before crossing the network/process boundary. Recovery can
 		// then distinguish unfinished work from work that was never dispatched.
 		if err := config.OnStart(call); err != nil {
-			return llm.Message{}, err
+			return llm.Message{}, false, err
 		}
 	}
 	started := time.Now().UTC()
@@ -222,7 +223,8 @@ func (loop *Loop) execute(ctx context.Context, config Config, call llm.ToolCall,
 	if err != nil {
 		result = &arsenal.Result{Success: false, Summary: err.Error(), Error: err.Error(), Dur: time.Since(started)}
 	}
-	if errors.Is(context.Cause(operation), mission.ErrPaused) {
+	paused := errors.Is(context.Cause(operation), mission.ErrPaused)
+	if paused {
 		result = &arsenal.Result{Success: false, Summary: "operation interrupted by pause; outcome is unknown", Error: mission.ErrPaused.Error(), Dur: time.Since(started)}
 	}
 	if !result.Success && result.Error == "" {
@@ -230,19 +232,19 @@ func (loop *Loop) execute(ctx context.Context, config Config, call llm.ToolCall,
 	}
 	if config.OnTool != nil {
 		if err := config.OnTool(Execution{Call: call, Result: result, StartedAt: started}); err != nil {
-			return llm.Message{}, fmt.Errorf("record tool evidence: %w", err)
+			return llm.Message{}, false, fmt.Errorf("record tool evidence: %w", err)
 		}
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
-		return llm.Message{}, fmt.Errorf("encode tool result: %w", err)
+		return llm.Message{}, false, fmt.Errorf("encode tool result: %w", err)
 	}
 	info.OK = result.Success
 	info.Output = result.Summary
 	if !emit(Event{Kind: KindToolEnd, Tool: info}) {
-		return llm.Message{}, ctx.Err()
+		return llm.Message{}, false, ctx.Err()
 	}
-	return llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Content: string(data)}, nil
+	return llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Content: string(data)}, result.Success && !paused, nil
 }
 
 func (loop *Loop) run(parent context.Context, config Config, task string, output chan<- Event) {
@@ -289,6 +291,7 @@ func (loop *Loop) run(parent context.Context, config Config, task string, output
 	totals := TokenUsage{}
 	usedTools := 0
 	seen := make(map[string]bool)
+	selector := NewAlternateSelector()
 	recoveries, outputLimit := 0, 0
 	for iteration := range iterations {
 		if ctx.Err() != nil {
@@ -356,12 +359,19 @@ func (loop *Loop) run(parent context.Context, config Config, task string, output
 			}
 			seen[call.ID] = true
 			usedTools++
-			observation, err := loop.execute(ctx, config, call, emit)
+			observation, toolOK, err := loop.execute(ctx, config, call, emit)
 			if err != nil {
 				fail(err)
 				return
 			}
 			messages = append(messages, observation)
+			if config.Backtrack && !toolOK && selector.ShouldRetry(task, 4) {
+				selector.RecordAttempt(task, call.Function.Name)
+				if hint := selector.AlternateHint(task, call.Function.Name); hint != "" {
+					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: hint})
+					emit(Event{Kind: KindNotice, Text: "backtrack hint injected after " + call.Function.Name + " failure"})
+				}
+			}
 		}
 		emit(Event{Kind: KindNotice, Text: fmt.Sprintf("iteration %d/%d", iteration+1, iterations)})
 	}

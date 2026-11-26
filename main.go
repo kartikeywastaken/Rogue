@@ -63,8 +63,8 @@ func run() error {
 	mcpMode := flag.Bool("mcp", false, "start the MCP JSON-RPC 2.0 stdio server")
 
 	// Phase 4: benchmarks
-	benchSuite := flag.String("benchmark", "", "run a benchmark suite: juice-shop, dvwa, webgoat, quick")
-	benchTarget := flag.String("benchmark-target", "", "target URL for the benchmark suite")
+	benchSuite := flag.String("benchmark", "", "run a benchmark suite: juice-shop, dvwa, webgoat, quick, cybench, nyu-ctf, xbow, local-ctf, categories")
+	benchTarget := flag.String("benchmark-target", "", "target URL, token, or challenge dir for --benchmark")
 
 	flag.Parse()
 	if *reportFormat != "json" && *reportFormat != "markdown" && *reportFormat != "sarif" && *reportFormat != "csv" && *reportFormat != "html" {
@@ -258,8 +258,22 @@ func run() error {
 			suite = bench.WebGoatSuite(*benchTarget)
 		case "quick":
 			suite = bench.QuickSuite(*benchTarget)
+		case "cybench":
+			suite = bench.CybenchSuite(*benchTarget)
+		case "nyu-ctf":
+			suite = bench.NYUCTFSuite(*benchTarget)
+		case "xbow":
+			suite = bench.XBOWSuite(*benchTarget)
+		case "local-ctf":
+			dir := *benchTarget
+			if dir == "" {
+				dir = "ctf/challenges"
+			}
+			suite = bench.LocalCTFSuite(dir)
+		case "categories":
+			suite = bench.AllCategoriesSuite(*benchTarget)
 		default:
-			return fmt.Errorf("unknown benchmark suite %q; available: juice-shop, dvwa, webgoat, quick", *benchSuite)
+			return fmt.Errorf("unknown benchmark suite %q; available: juice-shop, dvwa, webgoat, quick, cybench, nyu-ctf, xbow, local-ctf, categories", *benchSuite)
 		}
 		result := runner.Run(ctx, suite)
 		var reportErr error

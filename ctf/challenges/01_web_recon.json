@@ -1,0 +1,8 @@
+{
+  "name": "web-header-flag",
+  "category": "web",
+  "description": "Identify missing HTTP security headers and extract the service flag banner returned by the assessment target.",
+  "expected_flag": "flag{header_recon_verified}",
+  "tags": ["web", "recon"],
+  "timeout_sec": 120
+}

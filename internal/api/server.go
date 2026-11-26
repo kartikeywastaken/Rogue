@@ -17,6 +17,7 @@ import (
 	"rogue/internal/operator"
 	"rogue/internal/storage"
 	"rogue/internal/telemetry"
+	"rogue/internal/whitebox"
 )
 
 // eventBus fans one mission's event stream out to any number of SSE subscribers.
@@ -98,6 +99,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/missions/{id}/abort", s.requireAuth(s.handleAbortMission))
 	s.mux.HandleFunc("GET /api/v1/missions/{id}/report", s.requireAuth(s.handleMissionReport))
 	s.mux.HandleFunc("GET /api/v1/missions/{id}/events", s.requireAuth(s.handleMissionEvents))
+	s.mux.HandleFunc("GET /api/v1/missions/{id}/inspect", s.requireAuth(s.handleMissionInspect))
+	s.mux.HandleFunc("POST /api/v1/whitebox/analyze", s.requireAuth(s.handleWhiteboxAnalyze))
 	s.mux.HandleFunc("GET /api/v1/tools", s.requireAuth(s.handleListTools))
 	s.mux.HandleFunc("GET /api/v1/tools/{name}", s.requireAuth(s.handleGetTool))
 	s.mux.HandleFunc("POST /api/v1/tools/{name}/exec", s.requireAuth(s.handleExecTool))
@@ -462,6 +465,40 @@ func (s *Server) handleListOperators(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, telemetry.SummarizeConfig())
+}
+
+func (s *Server) handleMissionInspect(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.harness == nil {
+		writeError(w, http.StatusServiceUnavailable, "harness not configured")
+		return
+	}
+	snap, err := s.harness.Inspect(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func (s *Server) handleWhiteboxAnalyze(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RepoPath string `json:"repo_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(body.RepoPath) == "" {
+		writeError(w, http.StatusBadRequest, "repo_path is required")
+		return
+	}
+	report, err := whitebox.Analyze(r.Context(), body.RepoPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

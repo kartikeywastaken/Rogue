@@ -6,6 +6,7 @@
 package arsenal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,8 +14,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,37 +79,34 @@ var cwePayloadFamilies = map[string][]string{
 	"CWE-915":  {"command", "ssti"},
 }
 
-// researchClient is a shared bounded HTTP client for execution probes.
-// 15 s timeout, max 3 redirects. Shared across all organs.
-var researchClient = &http.Client{
-	Timeout: 15 * time.Second,
-	CheckRedirect: func(r *http.Request, via []*http.Request) error {
-		if len(via) >= 3 {
-			return http.ErrUseLastResponse
-		}
-		return nil
-	},
+// researchSchema builds a JSON Schema where execute (and optional boolFields) are
+// typed boolean so Registry.Exec validates execute=true properly alongside string fields.
+func researchSchema(required []string, boolFields []string, fields ...string) map[string]any {
+	schema := stringSchema(required, fields...)
+	props := schema["properties"].(map[string]any)
+	for _, bf := range boolFields {
+		props[bf] = map[string]any{"type": "boolean"}
+	}
+	return schema
 }
 
-// probeGET makes a bounded GET to rawURL and returns the status and up to 64 KB
-// of body. Only http/https schemes are permitted. The URL must be in scope.
+// probeGET makes a bounded GET to rawURL using the policy-scoped client (DNS-rebinding
+// protection + redirect target scope enforcement) and OPSEC jitter. Up to 64 KB body.
 func probeGET(ctx context.Context, rawURL string) (status int, body string, err error) {
-	parsed, pErr := url.Parse(rawURL)
-	if pErr != nil {
-		return 0, "", pErr
+	if err := opsec.Sleep(ctx); err != nil {
+		return 0, "", err
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return 0, "", errors.New("only http/https probes are supported")
-	}
-	if scopeErr := checkURL(ctx, rawURL); scopeErr != nil {
+	if _, scopeErr := checkURL(ctx, rawURL); scopeErr != nil {
 		return 0, "", fmt.Errorf("probe out of scope: %w", scopeErr)
 	}
+	client := newScopedHTTPClient(3, true)
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return 0, "", err
 	}
-	req.Header.Set("User-Agent", opsec.RandomUserAgent())
-	resp, err := researchClient.Do(req)
+	opsec.ApplyBlendHeaders(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, "", err
 	}
@@ -115,18 +115,13 @@ func probeGET(ctx context.Context, rawURL string) (status int, body string, err 
 	return resp.StatusCode, string(b), nil
 }
 
-// probePOST makes a bounded POST to rawURL with form values or a JSON body.
-// bodyType is "form" or "json". Only http/https schemes are permitted. The URL
-// must be in scope.
+// probePOST makes a bounded POST to rawURL with form values or a JSON body using
+// the policy-scoped client and OPSEC jitter. bodyType is "form" or "json".
 func probePOST(ctx context.Context, rawURL, bodyType, payload string) (status int, body string, err error) {
-	parsed, pErr := url.Parse(rawURL)
-	if pErr != nil {
-		return 0, "", pErr
+	if err := opsec.Sleep(ctx); err != nil {
+		return 0, "", err
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return 0, "", errors.New("only http/https probes are supported")
-	}
-	if scopeErr := checkURL(ctx, rawURL); scopeErr != nil {
+	if _, scopeErr := checkURL(ctx, rawURL); scopeErr != nil {
 		return 0, "", fmt.Errorf("probe out of scope: %w", scopeErr)
 	}
 	var (
@@ -141,13 +136,15 @@ func probePOST(ctx context.Context, rawURL, bodyType, payload string) (status in
 		contentType = "application/x-www-form-urlencoded"
 		bodyData = payload
 	}
+	client := newScopedHTTPClient(3, true)
+	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(bodyData))
 	if err != nil {
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("User-Agent", opsec.RandomUserAgent())
-	resp, err := researchClient.Do(req)
+	opsec.ApplyBlendHeaders(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, "", err
 	}
@@ -235,13 +232,20 @@ func registerLeviathan(registry *Registry) {
 			"execute=true, dispatches the top-3 priority phases as task proposals " +
 			"via mission control (requires supervisor service). Does not modify " +
 			"state autonomously beyond the proposal API.",
-		Parameters: stringSchema(nil, "focus", "execute"),
+		Parameters: researchSchema(nil, []string{"execute"}, "focus", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				Focus   string
 				Execute bool
 			}
-			_ = json.Unmarshal(raw, &args)
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "leviathan_plan", raw); err != nil {
+					return nil, err
+				}
+			}
 
 			services, _ := ctx.Value(servicesKey{}).(Services)
 			if services.Mission == nil || services.Surface == nil || services.Chains == nil {
@@ -385,7 +389,7 @@ func registerSphinx(registry *Registry) {
 			"performs a live HTTP GET to the target and reports whether the " +
 			"assertion indicator appears in the response body. Does not confirm " +
 			"exploitability.",
-		Parameters: stringSchema([]string{"evidence_ids", "assertion"}, "evidence_ids", "assertion", "target_url", "execute"),
+		Parameters: researchSchema([]string{"evidence_ids", "assertion"}, []string{"execute"}, "evidence_ids", "assertion", "target_url", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				EvidenceIDs string `json:"evidence_ids"`
@@ -395,6 +399,11 @@ func registerSphinx(registry *Registry) {
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "sphinx_validate", raw); err != nil {
+					return nil, err
+				}
 			}
 			ids, err := boundedList(args.EvidenceIDs, 16)
 			if err != nil {
@@ -456,7 +465,7 @@ func registerGorgon(registry *Registry) {
 			"up to 8 raw payload candidates via HTTP GET probes. Use ROGUE_INJECT " +
 			"in the target URL as the injection point, or the value is appended " +
 			"as query param 'q'.",
-		Parameters: stringSchema([]string{"cwe"}, "cwe", "target", "execute"),
+		Parameters: researchSchema([]string{"cwe"}, []string{"execute"}, "cwe", "target", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				CWE     string `json:"cwe"`
@@ -465,6 +474,11 @@ func registerGorgon(registry *Registry) {
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "gorgon_assess", raw); err != nil {
+					return nil, err
+				}
 			}
 			if args.CWE == "" {
 				return nil, errors.New("CWE identifier is required")
@@ -596,19 +610,28 @@ func registerCerberus(registry *Registry) {
 		Internal: true,
 		Description: "Rank privilege escalation candidates for a platform based " +
 			"on supplied configuration facts. Uses 50+ Linux/Windows technique " +
-			"definitions. When execute=true, runs safe read-only OS commands " +
-			"(id, uname -r, SUID discovery, sudo -l on Linux; whoami and net " +
-			"localgroup on Windows) to gather live facts before ranking. Does " +
-			"not execute privilege escalation.",
-		Parameters: stringSchema([]string{"platform", "facts"}, "platform", "facts", "execute"),
+			"definitions. When execute=true, runs safe read-only OS checks locally or " +
+			"over SSH (when ssh_target is set and in scope) to gather live facts before " +
+			"ranking. Does not execute privilege escalation.",
+		Parameters: researchSchema([]string{"platform", "facts"}, []string{"execute"},
+			"platform", "facts", "execute", "ssh_target", "ssh_user", "ssh_port", "credential_id"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
-				Platform string
-				Facts    string
-				Execute  bool
+				Platform     string
+				Facts        string
+				Execute      bool
+				SSHTarget    string `json:"ssh_target"`
+				SSHUser      string `json:"ssh_user"`
+				SSHPort      string `json:"ssh_port"`
+				CredentialID string `json:"credential_id"`
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "cerberus_privesc", raw); err != nil {
+					return nil, err
+				}
 			}
 			platform := strings.ToLower(args.Platform)
 			if platform != "linux" && platform != "windows" {
@@ -616,8 +639,8 @@ func registerCerberus(registry *Registry) {
 			}
 
 			factMap := make(map[string]bool)
-			for _, raw := range strings.Split(args.Facts, ",") {
-				fact := strings.TrimSpace(raw)
+			for _, rawFact := range strings.Split(args.Facts, ",") {
+				fact := strings.TrimSpace(rawFact)
 				if fact != "" {
 					if !strings.HasPrefix(fact, platform+".") {
 						fact = platform + "." + fact
@@ -627,66 +650,17 @@ func registerCerberus(registry *Registry) {
 			}
 
 			liveOutputs := map[string]string{}
+			remoteUsed := false
 			if args.Execute {
-				type osCmd struct {
-					bin  string
-					argv []string
-					key  string // display key in live_os_outputs
-				}
-				var cmds []osCmd
-				if platform == "linux" {
-					cmds = []osCmd{
-						{"id", nil, "id"},
-						{"uname", []string{"-r"}, "uname_r"},
-						{"find", []string{"/usr/bin", "/usr/sbin", "-perm", "-4000", "-type", "f"}, "suid_binaries"},
-						{"sudo", []string{"-n", "-l"}, "sudo_l"},
-						{"find", []string{"/etc/cron*", "-writable"}, "writable_cron"},
+				if args.SSHTarget != "" {
+					var err error
+					liveOutputs, err = collectRemoteSSHPrivescFacts(ctx, args.SSHTarget, args.SSHUser, args.SSHPort, args.CredentialID, factMap)
+					if err != nil {
+						return nil, err
 					}
+					remoteUsed = true
 				} else {
-					cmds = []osCmd{
-						{"whoami", nil, "whoami"},
-						{"net", []string{"localgroup", "administrators"}, "net_localgroup_admins"},
-						{"reg", []string{"query", "HKLM\\SYSTEM\\CurrentControlSet\\Services", "/s"}, "services_reg"},
-					}
-				}
-				for _, cmd := range cmds {
-					cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-					out, err := exec.CommandContext(cmdCtx, cmd.bin, cmd.argv...).CombinedOutput()
-					cancel()
-					if err == nil && len(out) > 0 {
-						output := strings.TrimSpace(string(out))
-						if len(output) > 2048 {
-							output = output[:2048] + "... (truncated)"
-						}
-						liveOutputs[cmd.key] = output
-						// Infer technique facts from live output content.
-						lOut := strings.ToLower(output)
-						if cmd.key == "sudo_l" {
-							if strings.Contains(lOut, "nopasswd") && strings.Contains(lOut, "all") {
-								factMap["linux.sudo.nopasswd_all"] = true
-							}
-							if strings.Contains(lOut, "setenv") {
-								factMap["linux.sudo.setenv"] = true
-							}
-						}
-						if cmd.key == "suid_binaries" && len(strings.TrimSpace(output)) > 0 {
-							// Any SUID binary found — check for interpreters
-							if strings.Contains(lOut, "python") || strings.Contains(lOut, "perl") ||
-								strings.Contains(lOut, "ruby") || strings.Contains(lOut, "php") {
-								factMap["linux.files.suid_interpreter"] = true
-							} else {
-								factMap["linux.files.suid_shell"] = true
-							}
-						}
-						if cmd.key == "writable_cron" && len(strings.TrimSpace(output)) > 0 {
-							factMap["linux.cron.root_writable"] = true
-						}
-						if cmd.key == "net_localgroup_admins" {
-							if strings.Contains(lOut, "administrator") {
-								factMap["windows.group.local_admin"] = true
-							}
-						}
-					}
+					liveOutputs = collectLocalPrivescFacts(ctx, platform, factMap)
 				}
 			}
 
@@ -707,7 +681,8 @@ func registerCerberus(registry *Registry) {
 				"total_techniques":    platformTechniques,
 				"escalation_executed": false,
 				"host_inspected":      args.Execute,
-				"limitation":          "Cerberus ranks techniques by configuration facts. When execute=true, runs read-only OS checks to gather live facts. It does not execute privilege escalation.",
+				"remote_ssh_used":     remoteUsed,
+				"limitation":          "Cerberus ranks techniques by configuration facts. When execute=true, runs read-only OS checks locally or over SSH to gather live facts. It does not execute privilege escalation.",
 			}
 			if args.Execute && len(liveOutputs) > 0 {
 				data["live_os_outputs"] = liveOutputs
@@ -720,6 +695,225 @@ func registerCerberus(registry *Registry) {
 			}, nil
 		},
 	})
+}
+
+func collectLocalPrivescFacts(ctx context.Context, platform string, factMap map[string]bool) map[string]string {
+	type osCmd struct {
+		bin            string
+		argv           []string
+		key            string
+		allowPartialOK bool // e.g. find exits 1 on permission denied despite stdout
+	}
+	var cmds []osCmd
+	if platform == "linux" {
+		cmds = []osCmd{
+			{"id", nil, "id", false},
+			{"uname", []string{"-r"}, "uname_r", false},
+			{"find", []string{"/usr/bin", "/usr/sbin", "-perm", "-4000", "-type", "f"}, "suid_binaries", true},
+			{"sudo", []string{"-n", "-l"}, "sudo_l", false},
+		}
+		// Only pass existing cron paths directly (no unexpanded glob without shell).
+		var existingCron []string
+		for _, candidate := range []string{"/etc/crontab", "/etc/cron.d", "/etc/cron.daily", "/etc/cron.hourly", "/etc/cron.weekly", "/etc/cron.monthly"} {
+			if _, err := os.Stat(candidate); err == nil {
+				existingCron = append(existingCron, candidate)
+			}
+		}
+		if len(existingCron) > 0 {
+			cronArgs := append(existingCron, "-writable")
+			cmds = append(cmds, osCmd{"find", cronArgs, "writable_cron", true})
+		}
+		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+			cmds = append(cmds, osCmd{"test", []string{"-w", "/var/run/docker.sock"}, "docker_sock_writable", false})
+		}
+	} else {
+		cmds = []osCmd{
+			{"whoami", nil, "whoami", false},
+			{"whoami", []string{"/priv"}, "whoami_priv", false},
+			{"net", []string{"localgroup", "administrators"}, "net_localgroup_admins", false},
+			{"reg", []string{"query", "HKLM\\SYSTEM\\CurrentControlSet\\Services", "/s"}, "services_reg", true},
+		}
+	}
+
+	liveOutputs := make(map[string]string)
+	for _, c := range cmds {
+		if ctx.Err() != nil {
+			break
+		}
+		cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cmd := exec.CommandContext(cmdCtx, c.bin, c.argv...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		cmd.Stdin = strings.NewReader("")
+		err := cmd.Run()
+		cancel()
+
+		if c.key == "docker_sock_writable" && err == nil {
+			liveOutputs[c.key] = "/var/run/docker.sock is writable"
+			factMap["linux.docker.socket_writable"] = true
+			continue
+		}
+		rawOut := stdout.Bytes()
+		if len(rawOut) == 0 && err == nil {
+			rawOut = stderr.Bytes()
+		}
+		if len(rawOut) > 0 && (err == nil || c.allowPartialOK) {
+			output := strings.TrimSpace(string(rawOut))
+			if len(output) > 2048 {
+				output = output[:2048] + "... (truncated)"
+			}
+			liveOutputs[c.key] = output
+			applyPrivescOutputFacts(c.key, output, factMap)
+		}
+	}
+	return liveOutputs
+}
+
+func collectRemoteSSHPrivescFacts(ctx context.Context, sshTarget, sshUser, sshPort, credID string, factMap map[string]bool) (map[string]string, error) {
+	if err := validateSimpleFlagValue(sshTarget, "ssh_target"); err != nil {
+		return nil, err
+	}
+	if err := checkHost(ctx, sshTarget); err != nil {
+		return nil, fmt.Errorf("cerberus_privesc ssh_target: %w", err)
+	}
+	if sshPort == "" {
+		sshPort = "22"
+	}
+	if !validPort(sshPort) {
+		return nil, errors.New("cerberus_privesc: invalid ssh_port")
+	}
+	if err := checkPort(ctx, sshPort); err != nil {
+		return nil, fmt.Errorf("cerberus_privesc ssh_port: %w", err)
+	}
+	if err := validateSimpleFlagValue(sshUser, "ssh_user"); err != nil {
+		return nil, err
+	}
+	sshBin, err := exec.LookPath("ssh")
+	if err != nil {
+		return nil, errors.New("cerberus_privesc: ssh client not found in PATH")
+	}
+
+	var keyFile string
+	if credID != "" {
+		services, _ := ctx.Value(servicesKey{}).(Services)
+		if services.Credential == nil {
+			return nil, errors.New("cerberus_privesc: credential service unavailable")
+		}
+		secret, cerr := services.Credential(credID, "ssh://"+sshTarget)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if strings.Contains(secret, "PRIVATE KEY") {
+			f, ferr := os.CreateTemp("", "rogue-ssh-*")
+			if ferr != nil {
+				return nil, ferr
+			}
+			keyFile = f.Name()
+			_ = f.Chmod(0600)
+			_, _ = f.WriteString(secret)
+			f.Close()
+			defer os.Remove(keyFile)
+		}
+	}
+
+	dest := sshTarget
+	if sshUser != "" {
+		dest = sshUser + "@" + sshTarget
+	}
+
+	remoteChecks := []struct {
+		key string
+		cmd string
+	}{
+		{"id", "id"},
+		{"uname_r", "uname -r"},
+		{"sudo_l", "sudo -n -l 2>/dev/null || true"},
+		{"suid_binaries", "find /usr/bin /usr/sbin -perm -4000 -type f 2>/dev/null || true"},
+		{"writable_cron", "find /etc/crontab /etc/cron.d /etc/cron.daily -writable 2>/dev/null || true"},
+	}
+
+	liveOutputs := make(map[string]string)
+	for _, rc := range remoteChecks {
+		if ctx.Err() != nil {
+			break
+		}
+		args := []string{
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "StrictHostKeyChecking=accept-new",
+			"-p", sshPort,
+		}
+		if keyFile != "" {
+			args = append(args, "-i", keyFile, "-o", "IdentitiesOnly=yes")
+		}
+		args = append(args, dest, rc.cmd)
+		out, rerr := ProcessRunner{}.Run(ctx, sshBin, args)
+		if rerr != nil && len(out) == 0 {
+			liveOutputs[rc.key] = "error: " + rerr.Error()
+			continue
+		}
+		output := strings.TrimSpace(string(out))
+		if len(output) > 2048 {
+			output = output[:2048] + "... (truncated)"
+		}
+		liveOutputs[rc.key] = output
+		applyPrivescOutputFacts(rc.key, output, factMap)
+	}
+	return liveOutputs, nil
+}
+
+func applyPrivescOutputFacts(key, output string, factMap map[string]bool) {
+	lOut := strings.ToLower(output)
+	switch key {
+	case "id":
+		if strings.Contains(lOut, "(docker)") {
+			factMap["linux.docker.group_member"] = true
+		}
+		if strings.Contains(lOut, "(lxd)") {
+			factMap["linux.lxd.group_member"] = true
+		}
+	case "sudo_l":
+		if strings.Contains(lOut, "nopasswd") && strings.Contains(lOut, "all") {
+			factMap["linux.sudo.nopasswd_all"] = true
+		}
+		if strings.Contains(lOut, "setenv") {
+			factMap["linux.sudo.setenv"] = true
+		}
+	case "suid_binaries":
+		if strings.TrimSpace(output) != "" {
+			if strings.Contains(lOut, "python") || strings.Contains(lOut, "perl") ||
+				strings.Contains(lOut, "ruby") || strings.Contains(lOut, "php") {
+				factMap["linux.files.suid_interpreter"] = true
+			} else {
+				factMap["linux.files.suid_shell"] = true
+			}
+		}
+	case "writable_cron":
+		if strings.TrimSpace(output) != "" {
+			factMap["linux.cron.root_writable"] = true
+		}
+	case "net_localgroup_admins":
+		if strings.Contains(lOut, "administrator") {
+			factMap["windows.group.local_admin"] = true
+		}
+	case "whoami_priv":
+		if strings.Contains(lOut, "seimpersonateprivilege") && strings.Contains(lOut, "enabled") {
+			factMap["windows.token.impersonate"] = true
+		}
+		if strings.Contains(lOut, "sedebugprivilege") && strings.Contains(lOut, "enabled") {
+			factMap["windows.token.debug"] = true
+		}
+		if strings.Contains(lOut, "seassignprimarytokenprivilege") && strings.Contains(lOut, "enabled") {
+			factMap["windows.token.assign_primary"] = true
+		}
+		if strings.Contains(lOut, "sebackupprivilege") && strings.Contains(lOut, "enabled") {
+			factMap["windows.token.backup"] = true
+		}
+		if strings.Contains(lOut, "serestoreprivilege") && strings.Contains(lOut, "enabled") {
+			factMap["windows.token.restore"] = true
+		}
+	}
 }
 
 // ── TYPHON — payload encoding and delivery ────────────────────────────────────
@@ -735,7 +929,7 @@ func registerTyphon(registry *Registry) {
 			"delivers the encoded value via HTTP GET — substitute ROGUE_INJECT in " +
 			"the URL or the value is appended as query param 'q'. Does not confirm " +
 			"WAF bypass or exploitability.",
-		Parameters: stringSchema([]string{"value", "format"}, "value", "format", "target_url", "execute"),
+		Parameters: researchSchema([]string{"value", "format"}, []string{"execute"}, "value", "format", "target_url", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				Value     string
@@ -745,6 +939,11 @@ func registerTyphon(registry *Registry) {
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "typhon_encode", raw); err != nil {
+					return nil, err
+				}
 			}
 			if len(args.Value) > 8192 {
 				return nil, errors.New("value exceeds 8 KiB limit")
