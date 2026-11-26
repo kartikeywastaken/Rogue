@@ -24,6 +24,11 @@ func RegisterWebAssessmentTools(registry *Registry) {
 	password := passwordTool()
 	password.SensitiveArgs = []string{"password"}
 	registry.Register(password)
+
+	// Active-scoped variants (ROGUE_ACTIVE=true unlocks these for non-loopback scoped targets)
+	registry.Register(activeSQLiTool())
+	registry.Register(activeXSSTool())
+	registry.Register(activePasswordSpray())
 }
 
 func whoisTool() *Tool {
@@ -196,4 +201,194 @@ func passwordTool() *Tool {
 		result.Data = map[string]any{"status": lastStatus, "checks": checks, "success_criterion": "2xx response with a nonempty authentication.token field; authorization privileges not verified"}
 		return result, nil
 	}}
+}
+
+// ── Active-Scoped Variants ──────────────────────────────────────────────────
+// These tools use activeURL() (from exploit_tools.go) instead of labURL(),
+// allowing non-loopback targets when ROGUE_ACTIVE=true + mission scope.
+
+func activeSQLiTool() *Tool {
+	return &Tool{
+		Name:     "active_sqli_scan",
+		Category: "vuln",
+		Description: "SQL injection probe on a scoped target. " +
+			"Compares a baseline GET with one syntax probe for database errors. " +
+			"Requires ROGUE_ACTIVE=true or ROGUE_LAB=true (loopback).",
+		Parameters: stringSchema([]string{"url", "parameter"}, "url", "parameter"),
+		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
+			var args struct{ URL, Parameter string }
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return nil, err
+			}
+			base, err := activeURL(ctx, args.URL)
+			if err != nil {
+				return nil, err
+			}
+			if err := authorizeActive(ctx, "active_sqli_scan", raw); err != nil {
+				return nil, err
+			}
+			if args.Parameter == "" || len(args.Parameter) > 64 {
+				return nil, errors.New("query parameter required (maximum 64 bytes)")
+			}
+			client := scopedHTTPClient()
+			defer client.CloseIdleConnections()
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			baseline, err := fetchSample(ctx, client, base.String())
+			if err != nil {
+				return nil, err
+			}
+			if baseline.Status == 429 {
+				return &Result{Success: false, Summary: "Rate limited", Data: map[string]any{"status": 429}}, nil
+			}
+			query := base.Query()
+			query.Set(args.Parameter, query.Get(args.Parameter)+"'")
+			base.RawQuery = query.Encode()
+			probe, err := fetchSample(ctx, client, base.String())
+			if err != nil {
+				return nil, err
+			}
+			data := map[string]any{"status": probe.Status, "baseline_status": baseline.Status, "url": args.URL, "parameter": args.Parameter, "confirmed_exploit": false}
+			result := &Result{Success: true, Data: data, Summary: "Probe completed; no confirmed exploit"}
+			pattern := regexp.MustCompile(`(?i)SQLITE_ERROR|SQL syntax.*MySQL|unterminated quoted string|syntax error at or near|SQLSTATE\[[0-9A-Z]+\]|ORA-[0-9]{5}`)
+			match := pattern.FindString(probe.Body)
+			data["new_database_error"] = match != "" && !pattern.MatchString(baseline.Body)
+			if data["new_database_error"] == true {
+				data["error_signature"] = match
+				result.Summary = "New database error exposed by syntax probe; injection exploitability unverified"
+				result.Findings = []domain.Finding{{Title: "Database error disclosed after query syntax probe", Description: "A database error signature appeared only after a single quoted query value.", Severity: domain.SevLow, CWE: "CWE-209", Remediation: "Use parameterized queries and suppress database diagnostics in client responses."}}
+			}
+			return result, nil
+		},
+	}
+}
+
+func activeXSSTool() *Tool {
+	return &Tool{
+		Name:     "active_xss_scan",
+		Category: "vuln",
+		Description: "XSS reflection probe on a scoped target. " +
+			"Checks whether a harmless HTML marker is reflected without encoding. " +
+			"Requires ROGUE_ACTIVE=true or ROGUE_LAB=true.",
+		Parameters: stringSchema([]string{"url", "parameter"}, "url", "parameter"),
+		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
+			var args struct{ URL, Parameter string }
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return nil, err
+			}
+			base, err := activeURL(ctx, args.URL)
+			if err != nil {
+				return nil, err
+			}
+			if err := authorizeActive(ctx, "active_xss_scan", raw); err != nil {
+				return nil, err
+			}
+			if args.Parameter == "" || len(args.Parameter) > 64 {
+				return nil, errors.New("query parameter required (maximum 64 bytes)")
+			}
+			client := scopedHTTPClient()
+			defer client.CloseIdleConnections()
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			markerBytes := make([]byte, 8)
+			if _, err = rand.Read(markerBytes); err != nil {
+				return nil, err
+			}
+			marker := "<rogue-" + hex.EncodeToString(markerBytes) + ">"
+			query := base.Query()
+			query.Set(args.Parameter, marker)
+			base.RawQuery = query.Encode()
+			probe, err := fetchSample(ctx, client, base.String())
+			if err != nil {
+				return nil, err
+			}
+			data := map[string]any{"status": probe.Status, "url": args.URL, "parameter": args.Parameter}
+			result := &Result{Success: true, Data: data, Summary: "No reflection detected"}
+			reflected := strings.Contains(strings.ToLower(probe.Headers.Get("Content-Type")), "text/html") && strings.Contains(probe.Body, marker)
+			data["unescaped_html_marker_reflected"] = reflected
+			if reflected {
+				result.Summary = "HTML-shaped input reflected without encoding; browser execution unverified"
+				result.Findings = []domain.Finding{{Title: "Unescaped HTML-shaped query input reflected", Description: "A unique harmless marker was reflected in an HTML response without angle-bracket encoding.", Severity: domain.SevInfo, CWE: "CWE-79", Remediation: "Apply context-aware output encoding and validate untrusted input."}}
+			}
+			return result, nil
+		},
+	}
+}
+
+func activePasswordSpray() *Tool {
+	t := &Tool{
+		Name:     "active_password_spray",
+		Category: "auth",
+		Description: "Test one password against at most 3 accounts on a scoped target. " +
+			"Requires ROGUE_ACTIVE=true or ROGUE_LAB=true.",
+		SensitiveArgs: []string{"password"},
+		Parameters:    stringSchema([]string{"url", "usernames", "password"}, "url", "usernames", "password"),
+		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
+			var args struct{ URL, Usernames, Password string }
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return nil, err
+			}
+			if _, err := activeURL(ctx, args.URL); err != nil {
+				return nil, err
+			}
+			if err := authorizeActive(ctx, "active_password_spray", raw); err != nil {
+				return nil, err
+			}
+			users, err := boundedList(args.Usernames, 3)
+			if err != nil {
+				return nil, err
+			}
+			if args.Password == "" || len(args.Password) > 1024 {
+				return nil, errors.New("one nonempty test password required (maximum 1024 bytes)")
+			}
+			client := scopedHTTPClient()
+			defer client.CloseIdleConnections()
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			var checks []map[string]any
+			lastStatus := 0
+			result := &Result{Success: true, Summary: "Active password spray completed; inspect individual statuses"}
+			for index, user := range users {
+				if index > 0 {
+					timer := time.NewTimer(time.Second)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return nil, ctx.Err()
+					case <-timer.C:
+					}
+				}
+				body, _ := json.Marshal(map[string]string{"email": user, "password": args.Password})
+				request, err := http.NewRequestWithContext(ctx, http.MethodPost, args.URL, strings.NewReader(string(body)))
+				if err != nil {
+					return nil, err
+				}
+				request.Header.Set("Content-Type", "application/json")
+				response, err := client.Do(request)
+				if err != nil {
+					return nil, err
+				}
+				payload, readError := io.ReadAll(io.LimitReader(response.Body, 65536))
+				response.Body.Close()
+				if readError != nil {
+					return nil, readError
+				}
+				var document struct{ Authentication struct{ Token string } }
+				_ = json.Unmarshal(payload, &document)
+				accepted := response.StatusCode >= 200 && response.StatusCode < 300 && document.Authentication.Token != ""
+				lastStatus = response.StatusCode
+				check := map[string]any{"username": user, "status": response.StatusCode, "token_returned": accepted}
+				if accepted {
+					fingerprint := sha256.Sum256([]byte(document.Authentication.Token))
+					check["token_fingerprint"] = hex.EncodeToString(fingerprint[:8])
+					result.Credentials = append(result.Credentials, domain.Credential{Type: "bearer", Username: user, Value: document.Authentication.Token, TargetID: args.URL})
+				}
+				checks = append(checks, check)
+				if response.StatusCode == 429 {
+					result.Summary = "Password spray stopped at rate limit"
+					break
+				}
+			}
+			result.Data = map[string]any{"status": lastStatus, "checks": checks}
+			return result, nil
+		},
+	}
+	return t
 }

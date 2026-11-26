@@ -44,6 +44,9 @@ func newRegistry() *arsenal.Registry {
 	arsenal.RegisterWhiteboxTool(registry)
 	arsenal.RegisterCloudTools(registry)
 	arsenal.RegisterAIRedTeamTool(registry)
+	arsenal.RegisterSandboxTools(registry)
+	arsenal.RegisterExploitTools(registry)
+	arsenal.RegisterCTFTools(registry)
 	return registry
 }
 
