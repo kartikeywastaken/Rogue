@@ -1,7 +1,7 @@
 {
   "name": "crypto-xor-decode",
   "category": "crypto",
-  "description": "Use crypto_analyze to recover the single-byte XOR-encoded flag from hex ciphertext: 323835332f2035362621330b2726263f2a3129",
+  "description": "Use crypto_analyze to recover the single-byte XOR-encoded flag from hex ciphertext: 323835332f2c3b260b353a35382d273d2729",
   "expected_flag": "flag{xor_analysis}",
   "tags": ["crypto", "xor"],
   "timeout_sec": 120

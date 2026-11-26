@@ -102,6 +102,3 @@ func supportedAssertions(allowed map[string]string) string {
 	}
 	return out
 }
-
-// Ensure fmt is used (it's referenced in the error format string).
-var _ = fmt.Sprintf

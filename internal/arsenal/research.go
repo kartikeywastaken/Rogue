@@ -17,7 +17,6 @@ import (
 	"os"
 	"os/exec"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1006,7 +1005,7 @@ func registerGriffin(registry *Registry) {
 			"fetches the URL content (up to 64 KB) and scans it for secrets in " +
 			"addition to any supplied text segments. Pattern matches are not " +
 			"verified live credentials.",
-		Parameters: stringSchema([]string{"texts"}, "texts", "source_url", "execute"),
+		Parameters: researchSchema([]string{"texts"}, []string{"execute"}, "texts", "source_url", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				Texts     string
@@ -1015,6 +1014,11 @@ func registerGriffin(registry *Registry) {
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "griffin_secrets", raw); err != nil {
+					return nil, err
+				}
 			}
 
 			segments := strings.Split(args.Texts, "---SEGMENT---")
@@ -1105,14 +1109,21 @@ func registerSimurgh(registry *Registry) {
 			"set, probes 12 common paths (/robots.txt, /.git/HEAD, /api, /admin, " +
 			"/swagger.json, /health, /.env, etc.) via HTTP GET to discover " +
 			"reachable surface. Does not exploit discovered paths.",
-		Parameters: stringSchema(nil, "focus", "target_url", "execute"),
+		Parameters: researchSchema(nil, []string{"execute"}, "focus", "target_url", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				Focus     string
 				TargetURL string `json:"target_url"`
 				Execute   bool
 			}
-			_ = json.Unmarshal(raw, &args)
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "simurgh_surface", raw); err != nil {
+					return nil, err
+				}
+			}
 
 			services, _ := ctx.Value(servicesKey{}).(Services)
 			// Surface service is optional — degrade gracefully when running outside engine context.
@@ -1189,7 +1200,7 @@ func registerHydra(registry *Registry) {
 			"concurrent HTTP GET probes against target_id URLs from the supplied " +
 			"findings (target_id must be a full http/https URL). Does not confirm " +
 			"exploitability.",
-		Parameters: stringSchema([]string{"findings_json"}, "findings_json", "execute"),
+		Parameters: researchSchema([]string{"findings_json"}, []string{"execute"}, "findings_json", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				FindingsJSON string `json:"findings_json"`
@@ -1197,6 +1208,11 @@ func registerHydra(registry *Registry) {
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "hydra_vectors", raw); err != nil {
+					return nil, err
+				}
 			}
 			if len(args.FindingsJSON) > 32768 {
 				return nil, errors.New("findings JSON exceeds 32 KiB")
@@ -1348,7 +1364,7 @@ func registerArachne(registry *Registry) {
 			"the same target and their validation preconditions. When execute=true, " +
 			"verifies the reachability of up to 4 hypothesis targets via HTTP GET " +
 			"probe. Does not execute exploit chains.",
-		Parameters: stringSchema([]string{"findings_json"}, "findings_json", "execute"),
+		Parameters: researchSchema([]string{"findings_json"}, []string{"execute"}, "findings_json", "execute"),
 		Execute: func(ctx context.Context, raw json.RawMessage) (*Result, error) {
 			var args struct {
 				FindingsJSON string `json:"findings_json"`
@@ -1356,6 +1372,11 @@ func registerArachne(registry *Registry) {
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, err
+			}
+			if args.Execute {
+				if err := authorizeActive(ctx, "arachne_chains", raw); err != nil {
+					return nil, err
+				}
 			}
 			if len(args.FindingsJSON) > 32768 {
 				return nil, errors.New("findings JSON exceeds 32 KiB")
