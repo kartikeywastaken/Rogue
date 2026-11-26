@@ -1,0 +1,124 @@
+ROGUE vs T3MP3ST — Feature & Capability Gap List (imp.txt)
+Generated from repository inspection against elder-plinius/T3MP3ST (paper.md & public repo)
+
+Note: This lists capabilities that T3MP3ST provides (or specifies as modules/tooling) that ROGUE currently lacks or only partially implements. Items where ROGUE already surpasses T3MP3ST (e.g., 8-operator execution, encrypted vault/checkpoints, SARIF/CSV/HTML export, Nmap/Nuclei import, strict scope/lab policy, multi-provider budget admission) are excluded here.
+
+================================================================================
+1. EXTERNAL SECURITY CLI WRAPPERS (internal/arsenal/)
+================================================================================
+ROGUE currently wraps only 3 external network CLI binaries (nmap, curl, dig) plus read-only host checks in cerberus_privesc. T3MP3ST wraps 15+ external CLI tools:
+
+[ ] Web Enumeration / Fuzzing:
+    - nikto        (web server misconfiguration & vulnerability scanner)
+    - gobuster     (directory/DNS/vhost brute-forcing)
+    - ffuf         (fast web fuzzer for paths, parameters, headers)
+    - dirb         (web content scanner)
+
+[ ] Exploitation / Active Injection & Auth:
+    - sqlmap       (automated SQL injection detection & exploitation)
+    - wfuzz        (web parameter/payload fuzzer)
+    - hydra        (network authentication brute-forcing — authorized/lab gated)
+
+[ ] Network / Recon:
+    - wget         (HTTP retrieval / recursive mirror / probing)
+    - host         (DNS lookup alternative)
+    - whois CLI    (native whois exists in ROGUE for IANA TCP/43, without referral-following CLI behavior)
+
+[ ] Crypto / Forensics / Binary Inspection:
+    - openssl      (full TLS cipher/protocol/cert inspection beyond Go stdlib handshake)
+    - xxd          (hex dump analysis)
+    - strings      (printable string extraction from binaries/artifacts)
+    - file         (magic-byte file type identification)
+    - exiftool     (metadata extraction from images/documents)
+    - binwalk      (firmware & embedded file analysis)
+
+================================================================================
+2. ACTIVE NETWORK / EXPLOITATION DEPTH & POST-EXPLOITATION
+================================================================================
+[ ] Un-throttled / Multi-Payload Active Scanners:
+    - Full TLS cipher/protocol suite enumeration (ssl_scan in ROGUE only verifies a single TLS >= 1.2 handshake; does not enumerate weak ciphers, SSLv3/TLS1.0/1.1, or Heartbleed/BEAST/etc.)
+    - Full SQLi & XSS scanners without hard 1-endpoint loopback-only limits when explicit authorization is configured (ROGUE's query probes are LabOnly/loopback-only; gorgon_assess caps at 8 raw GET/POST payloads)
+    - Active password brute-force / spray beyond 3 disposable usernames
+    - Recursive web crawling & form/parameter extraction (ROGUE dir_bruteforce checks up to 16 explicit paths; simurgh_surface probes 12 fixed paths)
+
+[ ] Scope Check Fix in Research Organs (security bug in current execution):
+    - Wire arsenal.checkURL(ctx, ...) and redirect scope validation into probeGET/probePOST in internal/arsenal/research.go so execute=true cannot escape ROGUE_SCOPE or hit ROGUE_EXCLUDED / disallowed ports.
+
+[ ] Remote Target Execution for Privilege Escalation (CERBERUS):
+    - Run privilege escalation checks against remote targets (e.g., over SSH/session transport) instead of only local host commands on the machine running ROGUE.
+    - Improve Linux/Windows live fact parsing (use `sudo -n -l` instead of blocking `sudo -l`; tolerate partial `find` stdout on permission errors; expand Windows/kernel/capability checks).
+
+================================================================================
+3. MULTI-DOMAIN & WHITE-BOX SECURITY MODULES
+================================================================================
+[ ] White-Box Repository / Source Code Analysis:
+    - T3MP3ST exposes `POST /api/whitebox/analyze` (repo ingestion -> decomposition -> SAST/code vulnerability analysis).
+    - ROGUE has no repository ingestion, AST/SAST scanning, or source-code audit pipeline.
+
+[ ] Binary Exploitation / Reverse Engineering / Forensics / Crypto / Smart Contracts:
+    - No binary/ELF/PE/Mach-O analysis tools, ROP/gadget inspection, symbolic/disassembly helpers, or forensics workflows.
+    - No smart contract / Solidity auditing tools.
+
+[ ] Cloud Security Posture / Assessment Module:
+    - T3MP3ST specifies CloudSecurity (AWS/GCP/Azure enumeration & IAM/metadata checks).
+    - ROGUE has no AWS/GCP/Azure SDK or cloud CLI assessment tools (explicitly deferred in ROADMAP.md).
+
+================================================================================
+4. BENCHMARK SUITES & CTF INFRASTRUCTURE (internal/bench/)
+================================================================================
+[ ] External Benchmark Dataset Adapters:
+    - Cybench integration (40 real CTF challenges with metadata, files, and flag verification)
+    - NYU CTF Bench integration (200 CTF challenges with challenge.json and flag evaluation)
+    - XBOW / XBEN benchmark suite support
+
+[ ] Additional Benchmark Categories & Scoring:
+    - Missing benchmark categories present in T3MP3ST: binary, crypto, reverse, forensics, autonomous_ops, plus structured OWASP Top 10 / MITRE ATT&CK / CWE Top 25 category matrices.
+    - Flag-based instant 100% grading + hybrid keyword/LLM-judge partial-credit evaluator (`evaluateResponseRigorous()` style).
+    - Built-in local CTF challenge fixtures (`ctf/challenges/`) and training range runner.
+
+================================================================================
+5. USER INTERFACES & DEVELOPER ECOSYSTEM
+================================================================================
+[ ] Web UI / "War Room" Dashboard:
+    - Browser-based SPA dashboard with:
+      * Live kill-chain topology & phase progress visualization
+      * Operator status cards & hover dossiers
+      * Live SSE intel/console feed with tooltips
+      * Findings / Evidence Vault explorer with severity filters
+      * Arsenal browser & parameter tester
+      * Built-in web terminal view
+      * Benchmark & CTF range runner UI
+      * Config/OPSEC preset library & settings UI
+      * Keyboard shortcuts & audio alert cues
+    - (ROGUE intentionally only has the Bubble Tea TUI + headless CLI + REST/SSE API.)
+
+[ ] TypeScript / Language SDK:
+    - Installable SDK package for programmatic embedding outside Go HTTP calls.
+
+[ ] Keyless Coding-Agent Session Integration:
+    - T3MP3ST can delegate reasoning to existing local coding-agent sessions (Claude Code, OpenAI Codex CLI, Hermes) without requiring separate provider API keys (e.g., `/api/codex/status`, `/api/codex/probe`).
+    - ROGUE requires a configured LLM API key or local Ollama/LM Studio/OpenAI-compatible HTTP endpoint.
+
+[ ] PDF Report Export:
+    - ROGUE supports JSON, Markdown, SARIF 2.1.0, CSV, and HTML, but lacks native PDF export (deferred to avoid external dependencies).
+
+================================================================================
+6. OPSEC, EVASION & ORCHESTRATION PATTERNS
+================================================================================
+[ ] Active HTTP OPSEC Evasion Mechanics:
+    - Randomized request jitter per OPSEC profile (e.g., Silent 5-15s, Covert 1-5s, Loud 0.1-0.5s)
+    - Traffic blending / User-Agent & timing randomization (ROGUE currently sets static `ROGUE-Research/1.0` in researchClient)
+    - Named OPSEC level presets (`Silent`, `Covert`, `Loud`, plus `StrictRoE` / `DefaultRoE`) wired directly into HTTP/CLI transports
+
+[ ] Dynamic Operator Auto-Scaling & Team Factories:
+    - Pre-built team compositions (`Balanced`, `Stealth`, `Breach` with multiple exploiters) selectable from CLI/API
+    - Dynamic auto-spawning up to N workers per archetype when queued tasks back up (ROGUE uses fixed operator pool + concurrency cap)
+
+[ ] Prompt-Level Red-Teaming / Jailbreak & Cognition Modules:
+    - AI/LLM red-teaming techniques (refusal suppression, encoding evasion for AI target testing)
+    - Pluggable reasoning strategies beyond standard ReAct loop (e.g., Tree-of-Thought, multi-branch backtracking on failed exploit paths)
+    - Swarm / pheromone-style coordination experiments
+
+[ ] Runtime Telemetry & Hook Wiring on HTTP/MCP Paths:
+    - Currently Metrics/Plugins hooks in ROGUE are wired into `--assess` (assessment.go), not into the HTTP API (`--serve`), TUI, or MCP (`--mcp`) execution paths.
+    - Real-time WebSocket transport (ROGUE uses SSE on HTTP API; T3MP3ST plans WebSockets as upgrade).
