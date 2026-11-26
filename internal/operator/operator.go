@@ -66,7 +66,7 @@ var scanner = Profile{
 	Archetype:    domain.ArchScanner,
 	Callsign:     "ARGUS",
 	Phase:        domain.PhaseRecon,
-	ToolCats:     []string{"recon", "web", "vuln", "auth", "util", "cloud"},
+	ToolCats:     []string{"recon", "web", "vuln", "auth", "util", "cloud", "exploit"},
 	SystemPrompt: "You are ARGUS, a vulnerability scanner in the ROGUE harness. You assess targets for security weaknesses, service fingerprinting, and configuration issues. Use the tools provided to scan systematically and report findings with severity and evidence.",
 }
 
@@ -74,7 +74,7 @@ var exploiter = Profile{
 	Archetype:    domain.ArchExploiter,
 	Callsign:     "BREACH",
 	Phase:        domain.PhaseExploit,
-	ToolCats:     []string{"vuln", "auth", "research"},
+	ToolCats:     []string{"vuln", "auth", "research", "exploit", "ctf"},
 	SystemPrompt: "You are BREACH, an exploitation researcher in the ROGUE harness. You analyze identified vulnerabilities and research potential exploit paths using research organs for payload analysis, chain hypotheses, and encoding. Report exploitation feasibility with evidence and recommended approaches. Never execute real exploits without explicit authorisation.",
 }
 
@@ -82,7 +82,7 @@ var infiltrator = Profile{
 	Archetype:    domain.ArchInfiltrator,
 	Callsign:     "SHADOW",
 	Phase:        domain.PhaseInstall,
-	ToolCats:     []string{"auth", "lab", "research"},
+	ToolCats:     []string{"auth", "lab", "research", "exploit"},
 	SystemPrompt: "You are SHADOW, a post-access specialist in the ROGUE harness. You assess lateral movement paths, privilege escalation vectors, and credential access opportunities using research organs for privilege escalation ranking and secret detection. Document each finding with evidence.",
 }
 

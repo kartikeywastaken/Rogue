@@ -180,6 +180,17 @@ func (e *Executor) execScript(ctx context.Context, interpreter, script string) (
 	}
 	cmd.WaitDelay = time.Second
 
+	// Apply OS-level confinement when available. This enforces filesystem
+	// isolation (writes only within workDir) and network blocking when
+	// AllowNetwork is false, using sandbox-exec on macOS or bwrap on Linux.
+	if confinementAvailable() {
+		confined, confErr := confineCommand(execCtx, cmd, e.WorkDir, e.AllowNetwork)
+		if confErr != nil {
+			return nil, fmt.Errorf("sandbox confinement setup failed: %w", confErr)
+		}
+		cmd = confined
+	}
+
 	start := time.Now()
 	runErr := cmd.Run()
 	dur := time.Since(start)
