@@ -43,7 +43,8 @@ type SetupOptions struct {
 // Setup wires the screen to the outside world. The TUI never touches files or
 // the network itself: main supplies the callbacks.
 type Setup struct {
-	Reason  string // why setup opened at startup
+	Reason  string      // why setup opened at startup
+	Current Credentials // what a startup engine was built from (no key); enables /model catalog switching
 	Options func() SetupOptions
 	Connect func(Credentials) (engine.Engine, error)
 	// ListModels returns the provider's catalog for the entered key (optional).
@@ -472,6 +473,7 @@ func (m Model) onConnected(msg connectedMsg) (Model, tea.Cmd) {
 	}
 	m.stopTurn()
 	m.eng = msg.eng
+	m.creds = msg.creds
 	m.provider = msg.creds.Provider
 	m.baseURL = msg.creds.BaseURL
 	m.model = msg.creds.Model

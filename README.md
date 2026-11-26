@@ -109,6 +109,7 @@ allows model-only discussion but blocks all target network tools.
 | `ROGUE_ALLOWED_TOOLS` | Optional tool-name allowlist; empty permits tools supported by the operator |
 | `ROGUE_PREAPPROVED_TOOLS` | Explicit prior authorization for named tools in default mode |
 | `ROGUE_TIMEOUT` | Mission deadline, default `3m` |
+| `ROGUE_REQUEST_TIMEOUT` | Optional whole model-request timeout; default `0s` uses the caller's deadline |
 | `ROGUE_MAX_ITERATIONS` | Model rounds, default `15` |
 | `ROGUE_CONCURRENCY` | Active operators, default `2`, range `1–8` |
 | `ROGUE_COOLDOWN` | Delay before reusing a worker, default `0s`, maximum `1m` |
@@ -118,15 +119,33 @@ allows model-only discussion but blocks all target network tools.
 | `ROGUE_OPSEC_ABORT_AFTER` | Recorded signal count before abort; `0` disables |
 | `ROGUE_MAX_TOOL_CALLS` | Executions attempted, default `64` |
 | `ROGUE_MAX_TOKENS` | Per-mission token admission budget, default `50000` |
-| `ROGUE_MAX_OUTPUT_TOKENS` | Output cap sent with each model request, default `2048` |
+| `ROGUE_MAX_OUTPUT_TOKENS` | Hard output ceiling per response, default `8192`; requests start at up to `2048` |
 | `ROGUE_COST_LIMIT_USD` | Optional per-mission estimated spend limit |
 | `ROGUE_INPUT_USD_PER_MILLION` | Explicit input price used for estimates |
 | `ROGUE_OUTPUT_USD_PER_MILLION` | Explicit output price used for estimates |
 
+Requests initially start at up to 2048 output tokens. A successfully expanded
+allowance is reused for that model in the same client, avoiding repeated
+truncation on every operator. If the provider explicitly reports
+token truncation, internal operator handoffs can regenerate the failed response
+at most twice: double the allowance, then use the configured ceiling on the final
+attempt (4096 then 8192 by default). Every attempt obeys the configured output
+ceiling, mission deadline, iteration limit, and shared
+budget. Partial tool calls never execute. Transport failures and already-streamed
+final prose are not automatically replayed. A visible notice identifies recovery.
+Coordinator preflight omits tool schemas and queued task descriptions; intermediate
+handoffs request short summaries rather than repeating the complete mission plan.
+
+Model requests use the mission deadline instead of a separate fixed 90-second
+cutoff. Set `ROGUE_REQUEST_TIMEOUT` to impose an additional, shorter request limit.
+`--check-provider` retains its separate bounded probe deadline. Slow local models
+may still need a longer `ROGUE_TIMEOUT` for an eight-role mission.
+
 Each HTTP attempt reserves a conservative input allowance plus its capped output
-before sending. Completed requests with usage settle against reported counts;
-failed or usage-less requests consume their full allowance. Retries and fallback
-share the mission budget. Dollar estimates require both prices; configure the
+before sending. Valid completions and explicit token-limit terminations with
+reported usage settle against those counts; other failed or usage-less requests
+consume their full allowance. Retries and fallback share the mission budget.
+Dollar estimates require both prices; configure the
 highest applicable rates when fallback models differ. Without prices, reports
 say pricing is unconfigured rather than pretending the requests were free.
 

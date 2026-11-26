@@ -142,3 +142,33 @@ func TestListModelsUsesSavedKeyAndEndpointRules(t *testing.T) {
 		t.Fatal("catalog request would send a key over plain HTTP")
 	}
 }
+
+func TestCurrentCredentialsForModelSwitching(t *testing.T) {
+	configEnv(t)
+	t.Setenv("ROGUE_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "credentials.json"))
+	if _, err := connectProvider(tui.Credentials{Provider: "gemini", APIKey: "g-key-12345678", Model: "gemini-a", Remember: true}); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadProviderConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := currentCredentials(config)
+	if c != (tui.Credentials{Provider: "gemini", Model: "gemini-a", Remember: true}) {
+		t.Fatalf("%+v", c) // never carries the key
+	}
+	// Switching via /model rebuilds with the saved key and updates the default.
+	c.Model = "gemini-b"
+	if eng, err := connectProvider(c); err != nil || eng.Models()[0] != "gemini-b" {
+		t.Fatal(err)
+	}
+	if config, _ = loadProviderConfig(); config.Model != "gemini-b" || config.APIKey != "g-key-12345678" {
+		t.Fatal("switch did not persist the model or lost the key", config.Model)
+	}
+	// A model pinned by the environment is not overwritten on disk.
+	t.Setenv("ROGUE_MODEL", "env-model")
+	config, _ = loadProviderConfig()
+	if currentCredentials(config).Remember {
+		t.Fatal("would save over a model the environment pins")
+	}
+}

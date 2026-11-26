@@ -218,6 +218,22 @@ func setupOptions() tui.SetupOptions {
 	return opts
 }
 
+// currentCredentials describes a startup engine to the TUI so /model can load
+// the provider's catalog and switch models. It never includes the key: the
+// switch resolves it again from the saved file or the environment. Remember is
+// set when the model came from the saved file, so a switch updates that default.
+func currentCredentials(config llm.Config) tui.Credentials {
+	c := tui.Credentials{Provider: config.Provider, Model: config.Model}
+	if info, _ := llm.LookupProvider(config.Provider); info.NeedsBaseURL {
+		c.BaseURL = config.BaseURL
+	}
+	path, _ := credentials.Path(os.Getenv)
+	saved, err := credentials.Load(path)
+	c.Remember = err == nil && path != "" && saved.Provider == config.Provider &&
+		strings.TrimSpace(os.Getenv("ROGUE_MODEL")) == ""
+	return c
+}
+
 // setupRequest is what the TUI's entries resolve to. Connecting and listing
 // models share it so both obey identical key and endpoint rules.
 type setupRequest struct {

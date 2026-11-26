@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,7 +25,8 @@ type Client struct {
 	// Lenient accepts tool-call stream shapes some compatibility layers emit:
 	// finish_reason "stop" alongside tool calls, deltas without an index, or
 	// calls without an id. Each call is still fully validated before use.
-	Lenient bool
+	Lenient     bool
+	outputHints sync.Map // successful output allowances, keyed by model
 }
 
 func NewOpenRouter(key string) *Client {
@@ -63,10 +65,7 @@ type sseChunk struct {
 }
 
 func (c *Client) ChatStream(ctx context.Context, model string, msgs []Message, tools []ToolDef) (<-chan StreamDelta, error) {
-	limit := c.MaxOutputTokens
-	if limit <= 0 {
-		limit = 2048
-	}
+	ctx, limit := generationContext(ctx, c.MaxOutputTokens, model, &c.outputHints)
 	requestBody := chatRequest{Model: model, Messages: msgs, Tools: tools, Stream: true, StreamOptions: map[string]bool{"include_usage": true}}
 	if c.Name == "openai" {
 		requestBody.MaxCompletionTokens = limit
@@ -254,6 +253,10 @@ func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- Str
 		fail(errors.New("unexpected EOF before stream completion"))
 		return
 	}
+	if reason == "length" {
+		fail(outputLimitFailure(ctx))
+		return
+	}
 	if reason != "stop" && reason != "tool_calls" {
 		fail(fmt.Errorf("incomplete response: finish reason %q", reason))
 		return
@@ -285,5 +288,6 @@ func (c *Client) readSSE(ctx context.Context, body io.ReadCloser, out chan<- Str
 		seen[p.id] = true
 		complete = append(complete, ToolCall{ID: p.id, Type: "function", Function: FuncCall{Name: p.name, Arguments: p.args}})
 	}
+	rememberGeneration(ctx)
 	send(StreamDelta{ToolCalls: complete, Done: true})
 }

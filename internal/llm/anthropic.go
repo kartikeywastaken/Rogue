@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type Anthropic struct {
 	Client          *http.Client
 	MaxOutputTokens int
 	Retries         int
+	outputHints     sync.Map
 }
 
 type anthropicMessage struct {
@@ -89,10 +91,7 @@ func anthropicBody(model string, messages []Message, tools []ToolDef, limit int)
 }
 
 func (provider *Anthropic) ChatStream(ctx context.Context, model string, messages []Message, tools []ToolDef) (<-chan StreamDelta, error) {
-	limit := provider.MaxOutputTokens
-	if limit <= 0 {
-		limit = 2048
-	}
+	ctx, limit := generationContext(ctx, provider.MaxOutputTokens, model, &provider.outputHints)
 	body, err := anthropicBody(model, messages, tools, limit)
 	if err != nil {
 		return nil, err
@@ -259,6 +258,10 @@ func readAnthropic(ctx context.Context, body io.ReadCloser, output chan<- Stream
 			usage.PromptTokens = max(usage.PromptTokens, event.Usage.Input+event.Usage.CacheCreated+event.Usage.CacheRead)
 			usage.CompletionTokens = max(usage.CompletionTokens, event.Usage.Output)
 		case "message_stop":
+			if started && stopReason == "max_tokens" {
+				send(StreamDelta{Usage: usage, Err: outputLimitFailure(ctx)})
+				return
+			}
 			if !started || (stopReason != "end_turn" && stopReason != "tool_use") {
 				fail(fmt.Errorf("incomplete Anthropic response: %s", stopReason))
 				return
@@ -295,6 +298,7 @@ func readAnthropic(ctx context.Context, body io.ReadCloser, output chan<- Stream
 				fail(errors.New("Anthropic stop reason disagrees with tool calls"))
 				return
 			}
+			rememberGeneration(ctx)
 			send(StreamDelta{Done: true, ToolCalls: calls, Usage: usage})
 			return
 		}

@@ -239,13 +239,20 @@ func (harness *Harness) executeTask(ctx context.Context, state *RunState, task m
 	// Downstream access/persistence roles currently perform evidence reviews.
 	// Giving them an empty set prevents a prompt from impersonating execution.
 	categories := slices.Clone(profile.ToolCats)
+	preflight := task.Archetype == domain.ArchCoordinator && len(task.Dependencies) == 0
 	if task.Archetype == domain.ArchScanner && len(task.Dependencies) > 1 {
 		// Service workers have already done the network assessment. This parent
 		// task is a review barrier, rather than a second scan of the same host.
 		categories = []string{}
 		task.Title = "Consolidate the completed service assessments without further tool execution. Empty and negative tool results are completed observations. State remaining gaps rather than repeating checks. " + task.Title
 	}
-	categories = append(categories, "context")
+	if preflight {
+		// No evidence exists yet. The baseline is already installed; advertising
+		// research/context tools here adds prompt cost without useful work.
+		categories = []string{}
+	} else {
+		categories = append(categories, "context")
+	}
 	allowed := harness.opts.Rules.AllowedTools
 	if request.Mode == ModeDefault {
 		allowed = state.approvedTools(harness.opts.Rules.PreapprovedTools)
@@ -272,6 +279,14 @@ func (harness *Harness) executeTask(ctx context.Context, state *RunState, task m
 		},
 	}
 	config.Lab = harness.opts.Lab
+	config.BufferOutput = profile.Archetype != domain.ArchAnalyst
+	if preflight {
+		config.SystemPrompt += "\nThe assessment dependency plan is already installed. Review only the objective and configured constraints; do not redesign the plan or enumerate the operators. No tools are needed in this preflight. Limit the handoff to 120 words: scope, priorities, and blockers."
+	} else if profile.Archetype != domain.ArchAnalyst {
+		config.SystemPrompt += "\nCall a needed tool directly without a long preamble. Keep the final handoff within 180 words: observed evidence IDs, gaps, and next steps. Do not repeat the mission plan or raw tool output."
+	} else {
+		config.SystemPrompt += "\nKeep the report concise (up to 600 words). Prioritize evidence-backed conclusions and remediation; do not restate every operator's narrative."
+	}
 	emit(Event{Kind: KindNotice, Text: profile.Callsign + " · " + string(task.Archetype) + " · " + task.ID})
 	prompt := harness.taskContext(state, task, profile)
 	var response strings.Builder

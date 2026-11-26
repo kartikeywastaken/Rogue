@@ -84,6 +84,7 @@ type Config struct {
 	Fallbacks                        []string
 	OutputLimit                      int
 	Retries                          int
+	RequestTimeout                   time.Duration
 }
 
 // LoadConfig reads explicit configuration. A missing credential never selects a
@@ -98,7 +99,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return config, fmt.Errorf("ROGUE_MODEL is required: choose a tool-capable %s model", config.Provider)
 	}
 	config.Models = []string{config.Model}
-	config.OutputLimit = 2048
+	config.OutputLimit = defaultOutputCeiling
 	config.Retries = 2
 	for _, setting := range []struct {
 		name     string
@@ -112,6 +113,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 			}
 			*setting.value = value
 		}
+	}
+	if raw := strings.TrimSpace(getenv("ROGUE_REQUEST_TIMEOUT")); raw != "" {
+		timeout, err := time.ParseDuration(raw)
+		if err != nil || timeout < 0 {
+			return config, fmt.Errorf("ROGUE_REQUEST_TIMEOUT must be a nonnegative duration (0s uses the caller's deadline)")
+		}
+		config.RequestTimeout = timeout
 	}
 	for _, model := range strings.Split(getenv("ROGUE_MODELS"), ",") {
 		model = strings.TrimSpace(model)
@@ -189,10 +197,10 @@ func isLoopback(host string) bool {
 func (config Config) RawClient() Provider {
 	var provider Provider
 	if config.Provider == "anthropic" {
-		provider = &Anthropic{APIKey: config.APIKey, Endpoint: strings.TrimRight(config.BaseURL, "/") + "/messages", Client: &http.Client{Timeout: 90 * time.Second}, MaxOutputTokens: config.OutputLimit, Retries: config.Retries}
+		provider = &Anthropic{APIKey: config.APIKey, Endpoint: strings.TrimRight(config.BaseURL, "/") + "/messages", Client: &http.Client{Timeout: config.RequestTimeout}, MaxOutputTokens: config.OutputLimit, Retries: config.Retries}
 	} else {
 		info, _ := LookupProvider(config.Provider)
-		provider = &Client{Name: config.Provider, APIKey: config.APIKey, Endpoint: strings.TrimRight(config.BaseURL, "/") + "/chat/completions", Client: &http.Client{Timeout: 90 * time.Second}, MaxOutputTokens: config.OutputLimit, Retries: config.Retries, Lenient: info.Lenient}
+		provider = &Client{Name: config.Provider, APIKey: config.APIKey, Endpoint: strings.TrimRight(config.BaseURL, "/") + "/chat/completions", Client: &http.Client{Timeout: config.RequestTimeout}, MaxOutputTokens: config.OutputLimit, Retries: config.Retries, Lenient: info.Lenient}
 	}
 	return provider
 }

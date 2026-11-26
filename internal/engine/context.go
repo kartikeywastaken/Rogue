@@ -96,11 +96,14 @@ func (harness *Harness) taskContext(state *RunState, task mission.Task, profile 
 	if len(context.Credentials) > 8 {
 		context.Credentials = context.Credentials[:8]
 	}
-	for _, planned := range mission.Tasks {
-		planned.Title = clip(planned.Title, 256)
-		planned.Result = ""
-		planned.Error = ""
-		context.Tasks = append(context.Tasks, planned)
+	// Preflight needs rules, not all nine queued task descriptions.
+	if task.Archetype != domain.ArchCoordinator || len(task.Dependencies) > 0 {
+		for _, planned := range mission.Tasks {
+			planned.Title = clip(planned.Title, 256)
+			planned.Result = ""
+			planned.Error = ""
+			context.Tasks = append(context.Tasks, planned)
+		}
 	}
 	for _, observation := range observations {
 		context.ExecutionFacts.ToolCounts[observation.Tool]++

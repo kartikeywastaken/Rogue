@@ -62,13 +62,7 @@ func (m Model) runCommand(input string) (Model, tea.Cmd) {
 			m.push(entry{kind: entNotice, text: padRight(k[0], 12) + k[1]})
 		}
 	case "/model":
-		m.picker = true
-		m.pickIdx = 0
-		for i, md := range m.eng.Models() {
-			if md == m.model {
-				m.pickIdx = i
-			}
-		}
+		return m, m.openPicker()
 	case "/provider", "/login", "/setup":
 		return m, m.openSetup()
 	case "/mode":

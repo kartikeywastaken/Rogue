@@ -302,6 +302,7 @@ func run() error {
 			return err
 		}
 		backend = harness
+		setup.Current = currentCredentials(config)
 	}
 	_, err = tea.NewProgram(tui.NewWithSetup(backend, setup)).Run()
 	return err

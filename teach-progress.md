@@ -553,8 +553,29 @@ unverified in this environment because no keys or model are configured.
   `\x1b[2J\x1b[31m...`. What could happen if Rogue rendered it as-is, and which
   function stops it?" Asked 2026-11-24. Awaiting learner.
 
+### Scope extension — in-session /model catalog switching (2026-11-24)
+- Trigger: learner hit Gemini HTTP 429 (free-tier limit 0 for gemini-4-carbon)
+  and /model only listed configured models.
+- /model now shows configured models + provider catalog (filterable). A
+  configured model switches instantly; any other model rebuilds the engine via
+  Setup.Connect, because Harness deliberately rejects models outside its
+  configured list (harness.go "model is not in the configured provider
+  catalog"). The guard was kept, not loosened.
+- main.currentCredentials tells the TUI which provider a startup engine uses
+  (never the key; it is re-resolved from saved file/env). Remember is true only
+  when the model came from the saved file, so an env-pinned ROGUE_MODEL is never
+  overwritten on disk.
+- 429/401/403/404 errors now add a next-step hint.
+- Bug caught during development: a failed switch on the landing screen was
+  pushed to an invisible transcript; now flashed there.
+
+#### S3-T6-Q1 — why rebuild instead of bypass (pending)
+- Question: "Harness.Run rejects a model not in harness.models. Why does /model
+  build a new engine through Connect instead of just removing that check?"
+  Asked 2026-11-24. Awaiting learner.
+
 ### Current position (Session 3)
-- Status: awaiting learner. Pending: S3-B0 (deferred), S3-T4-Q1, S3-T5-Q1.
+- Status: awaiting learner. Pending: S3-B0 (deferred), S3-T4-Q1, S3-T5-Q1, S3-T6-Q1.
   Learner has moved through three feature requests without answering; keep
   offering one question per change, never block work on it.
   Session 2's S1-Q1 is still pending separately.

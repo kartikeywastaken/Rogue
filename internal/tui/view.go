@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -44,10 +43,7 @@ func (m Model) viewLanding() string {
 	wm := renderWordmark(wordmarks[m.wmIdx].word, m.width, m.height)
 	parts = append(parts, lipgloss.NewStyle().Width(lipgloss.Width(wm)).Render(wm))
 	if m.height >= 18 {
-		parts = append(parts, "", stMuted.Render("an agent harness for your terminal"))
-	}
-	if m.height >= 22 {
-		parts = append(parts, stDim.Render("stream  ·  tools  ·  sessions"))
+		parts = append(parts, "", stMuted.Render("Security focused Harness"))
 	}
 	parts = append(parts, "", m.inputBox())
 	if list := m.renderList(); list != "" {
@@ -146,20 +142,7 @@ func (m Model) listRows() string {
 	selected := lipgloss.NewStyle().Background(colSelected).Foreground(colLogo).Bold(true).Width(ww)
 
 	if m.picker {
-		rows := []string{stMuted.Render("choose a model  ·  ↵ select  ·  esc cancel")}
-		for i, md := range m.eng.Models() {
-			cur := "  "
-			if md == m.model {
-				cur = "● "
-			}
-			line := fmt.Sprintf("  %d  %s%s", i+1, cur, md)
-			if i == m.pickIdx {
-				rows = append(rows, selected.Render("›"+line[1:]))
-			} else {
-				rows = append(rows, stText.Render(line))
-			}
-		}
-		return strings.Join(rows, "\n")
+		return m.pickerRows(ww)
 	}
 
 	items := m.paletteItems()

@@ -67,10 +67,16 @@ type Model struct {
 	mode  engine.Mode
 	cwd   string
 
-	palIdx  int  // highlighted slash command
-	picker  bool // model picker open
-	pickIdx int
-	flash   string // one-line inline error under the input
+	palIdx      int  // highlighted slash command
+	picker      bool // model picker open
+	pickIdx     int
+	pickFilter  string   // typed filter
+	pickList    []string // configured models first, then the provider catalog
+	pickLoading bool
+	pickErr     string
+	pickSeq     int    // identifies the latest catalog request
+	switching   bool   // rebuilding the engine for a newly picked model
+	flash       string // one-line inline error under the input
 
 	history []string
 	histIdx int
@@ -81,6 +87,7 @@ type Model struct {
 
 	setupCfg *Setup      // nil when in-TUI provider setup is unavailable
 	setup    *setupState // non-nil while the setup screen is open
+	creds    Credentials // what the current engine was built from (key only if typed)
 	provider string      // provider connected through setup, if any
 	baseURL  string      // its base URL, when the provider needs one
 }
@@ -150,6 +157,9 @@ func NewWithSetup(eng engine.Engine, setup *Setup) Model {
 		cwd:      cwd,
 		setupCfg: setup,
 	}
+	if setup != nil {
+		m.creds = setup.Current
+	}
 	if eng == nil {
 		m.openSetup()
 	}
@@ -200,8 +210,16 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	case modelsMsg:
 		return m.onModels(msg)
 
+	case pickerModelsMsg:
+		return m.onPickerModels(msg)
+
+	case modelSwitchedMsg:
+		return m.onModelSwitched(msg)
+
 	case spinner.TickMsg:
-		if !m.running && (m.setup == nil || (m.setup.step != stepConnecting && !m.setup.loading)) {
+		busy := m.running || m.switching || (m.picker && m.pickLoading) ||
+			(m.setup != nil && (m.setup.step == stepConnecting || m.setup.loading))
+		if !busy {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -226,6 +244,11 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 			return m, cmd
 		}
+		if m.picker {
+			m.pickFilter += strings.Join(strings.Fields(msg.Content), "")
+			m.pickIdx = 0
+			return m, nil
+		}
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 
@@ -248,7 +271,7 @@ func (m Model) onKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 
 	if m.picker {
-		return m.onPickerKey(k)
+		return m.onPickerKey(msg)
 	}
 
 	if cmds := m.paletteItems(); cmds != nil {
@@ -327,33 +350,6 @@ func (m Model) onKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) onPickerKey(k string) (Model, tea.Cmd) {
-	models := m.eng.Models()
-	switch k {
-	case "esc":
-		m.picker = false
-	case "up":
-		m.pickIdx = max(0, m.pickIdx-1)
-	case "down":
-		m.pickIdx = min(len(models)-1, m.pickIdx+1)
-	case "enter":
-		if len(models) > 0 {
-			m.model = models[m.pickIdx]
-			m.notice("model → " + m.model)
-		}
-		m.picker = false
-	default:
-		if len(k) == 1 && k[0] >= '1' && k[0] <= '9' {
-			if i := int(k[0] - '1'); i < len(models) {
-				m.model = models[i]
-				m.notice("model → " + m.model)
-				m.picker = false
-			}
-		}
-	}
-	return m, nil
-}
-
 func (m Model) submit() (Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
@@ -365,6 +361,10 @@ func (m Model) submit() (Model, tea.Cmd) {
 	}
 	if m.running {
 		m.flash = "a turn is running · esc to interrupt"
+		return m, nil
+	}
+	if m.switching {
+		m.flash = "switching model · one moment"
 		return m, nil
 	}
 
@@ -424,6 +424,9 @@ func (m Model) onEvent(msg eventMsg) (Model, tea.Cmd) {
 			text = ev.Err.Error()
 		}
 		m.push(entry{kind: entError, text: text})
+		if hint := errorHint(text); hint != "" {
+			m.push(entry{kind: entNotice, text: hint})
+		}
 		m.endTurn()
 		return m, nil
 	case engine.KindDone:

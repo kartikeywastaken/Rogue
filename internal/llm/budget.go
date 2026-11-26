@@ -123,7 +123,10 @@ func account(ctx context.Context, stream <-chan StreamDelta, request *reservatio
 			usage.PromptTokens = max(usage.PromptTokens, delta.Usage.PromptTokens)
 			usage.CompletionTokens = max(usage.CompletionTokens, delta.Usage.CompletionTokens)
 			complete = complete || delta.Done
-			if delta.Done {
+			// A token-limited response is not an executable completion, but its
+			// final reported usage is valid. Settle before forwarding the error
+			// so a bounded regeneration sees the correct remaining budget.
+			if delta.Done || errors.Is(delta.Err, ErrOutputLimit) {
 				request.finish(usage, true)
 				settled = true
 			}

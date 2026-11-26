@@ -53,6 +53,7 @@ type Config struct {
 	OnStart        func(llm.ToolCall) error
 	OnTool         func(Execution) error
 	Lab            bool
+	BufferOutput   bool // internal handoffs publish only complete prose
 }
 
 type Execution struct {
@@ -122,9 +123,20 @@ func (loop *Loop) ask(ctx context.Context, config Config, messages []llm.Message
 					return result, errors.New("provider closed stream without completion")
 				}
 				result.text = text.String()
+				if config.BufferOutput && result.text != "" && !emit(Event{Kind: KindText, Text: result.text}) {
+					return result, ctx.Err()
+				}
 				return result, nil
 			}
+			result.input = max(result.input, delta.Usage.PromptTokens)
+			result.output = max(result.output, delta.Usage.CompletionTokens)
+			if delta.Usage.PromptTokens > 0 || delta.Usage.CompletionTokens > 0 {
+				if !emit(Event{Kind: KindUsage, Usage: TokenUsage{Input: totals.Input + result.input, Output: totals.Output + result.output}}) {
+					return result, ctx.Err()
+				}
+			}
 			if delta.Err != nil {
+				result.text = text.String()
 				if errors.Is(context.Cause(operation), mission.ErrPaused) {
 					return result, mission.ErrPaused
 				}
@@ -137,15 +149,11 @@ func (loop *Loop) ask(ctx context.Context, config Config, messages []llm.Message
 				return result, ctx.Err()
 			}
 			if delta.Content != "" {
-				text.WriteString(delta.Content)
-				if !emit(Event{Kind: KindText, Text: delta.Content}) {
-					return result, ctx.Err()
+				if text.Len()+len(delta.Content) > 1024*1024 {
+					return result, errors.New("model response exceeds 1 MiB")
 				}
-			}
-			result.input = max(result.input, delta.Usage.PromptTokens)
-			result.output = max(result.output, delta.Usage.CompletionTokens)
-			if delta.Usage.PromptTokens > 0 || delta.Usage.CompletionTokens > 0 {
-				if !emit(Event{Kind: KindUsage, Usage: TokenUsage{Input: totals.Input + result.input, Output: totals.Output + result.output}}) {
+				text.WriteString(delta.Content)
+				if !config.BufferOutput && !emit(Event{Kind: KindText, Text: delta.Content}) {
 					return result, ctx.Err()
 				}
 			}
@@ -281,23 +289,46 @@ func (loop *Loop) run(parent context.Context, config Config, task string, output
 	totals := TokenUsage{}
 	usedTools := 0
 	seen := make(map[string]bool)
+	recoveries, outputLimit := 0, 0
 	for iteration := range iterations {
 		if ctx.Err() != nil {
 			return
 		}
-		reply, err := loop.ask(ctx, config, messages, tools, totals, emit)
+		requestCtx := ctx
+		if outputLimit > 0 {
+			requestCtx = llm.WithOutputLimit(ctx, outputLimit)
+		}
+		reply, err := loop.ask(requestCtx, config, messages, tools, totals, emit)
+		totals.Input += reply.input
+		totals.Output += reply.output
+		if totals.Input+totals.Output >= tokenLimit {
+			fail(ErrTokenLimit)
+			return
+		}
 		if errors.Is(err, mission.ErrPaused) {
 			emit(Event{Kind: KindNotice, Text: "model response interrupted by pause; waiting for resume"})
 			continue
 		}
 		if err != nil {
+			var limited *llm.OutputLimitError
+			// Regenerate only an explicitly token-limited response whose partial
+			// prose has not been published. Transport failures are never replayed,
+			// and calls from an incomplete response are never dispatched.
+			if errors.As(err, &limited) && (config.BufferOutput || reply.text == "") && len(reply.calls) == 0 && recoveries < 2 && iteration+1 < iterations && ctx.Err() == nil {
+				if next := limited.NextLimit(); next > 0 {
+					if recoveries == 1 {
+						next = limited.Ceiling // final bounded attempt honors a larger explicit ceiling
+					}
+					outputLimit = next
+					if recoveries == 0 {
+						messages[0].Content += "\nThe previous generation reached its output limit and was discarded. Generate this response afresh, concisely. Do not repeat any tool action already represented by a tool result in this conversation."
+					}
+					recoveries++
+					emit(Event{Kind: KindNotice, Text: fmt.Sprintf("output limit reached; regenerating this response with up to %d tokens (%d/2)", next, recoveries)})
+					continue
+				}
+			}
 			fail(err)
-			return
-		}
-		totals.Input += reply.input
-		totals.Output += reply.output
-		if totals.Input+totals.Output >= tokenLimit {
-			fail(ErrTokenLimit)
 			return
 		}
 		if err := validateCalls(reply.calls, seen); err != nil {
