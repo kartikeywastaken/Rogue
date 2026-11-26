@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"time"
 
 	"rogue/internal/agent"
@@ -33,8 +35,28 @@ func(harness *Harness) runChild(ctx context.Context,state *RunState,task mission
 }
 
 func validateEvidence(state *RunState,ids []string,assertion string)(any,error){
-	allowed:=map[string]string{"sql_error":"new_database_error","html_reflection":"unescaped_html_marker_reflected","authenticated_access":"authenticated_access_confirmed","cleanup_absence":"absence_verified_in_complete_response"}
-	field,found:=allowed[assertion];if !found{return nil,errors.New("unsupported assertion; arbitrary exploitability and CVE applicability cannot be inferred")}
+	allowed:=map[string]string{
+		// Originally supported assertions
+		"sql_error":            "new_database_error",
+		"html_reflection":      "unescaped_html_marker_reflected",
+		"authenticated_access": "authenticated_access_confirmed",
+		"cleanup_absence":      "absence_verified_in_complete_response",
+		// Extended assertions for real assessment coverage
+		"server_error":         "server_error_observed",
+		"redirect_observed":    "redirect_observed",
+		"auth_bypass":          "auth_bypass_observed",
+		"traversal_read":       "file_traversal_content_read",
+		"ssrf_callback":        "ssrf_callback_observed",
+		"command_output":       "command_output_observed",
+		"ssti_evaluation":      "template_evaluation_observed",
+		"xxe_data_read":        "xxe_data_read_observed",
+		"open_redirect":        "open_redirect_observed",
+		"idor_access":          "idor_access_observed",
+		"jwt_forged":           "jwt_accepted_with_forged_claim",
+		"cookie_missing_flag":  "cookie_security_flag_absent",
+		"cors_misconfigured":   "cors_origin_reflected",
+	}
+	field,found:=allowed[assertion];if !found{return nil,fmt.Errorf("unsupported assertion %q; supported: %s; arbitrary exploitability and CVE applicability cannot be inferred",assertion,supportedAssertions(allowed))}
 	type assessment struct{ID,Tool,Verdict string;Success bool}
 	var results []assessment
 	for _,id:=range ids{
@@ -63,3 +85,23 @@ func chainResearch(state *RunState)any{
 	evidence:=state.Evidence.PublicSnapshot();evidence.Observations=state.Evidence.Observations()
 	return map[string]any{"observed_access_paths":observedPaths(Report{Evidence:evidence}),"candidate_chains":research.MatchChains(evidence.Findings),"reference_templates":research.Chains(),"exploit_chain_execution_claimed":false}
 }
+
+// supportedAssertions returns a sorted comma-separated list of valid assertion names.
+func supportedAssertions(allowed map[string]string) string {
+	keys := make([]string, 0, len(allowed))
+	for k := range allowed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := ""
+	for i, k := range keys {
+		if i > 0 {
+			out += ", "
+		}
+		out += k
+	}
+	return out
+}
+
+// Ensure fmt is used (it's referenced in the error format string).
+var _ = fmt.Sprintf
