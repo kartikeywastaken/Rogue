@@ -1,0 +1,68 @@
+---
+// The scope gate figure. Static art is built by figure/build.mjs (anatomy kit) at build time;
+// the live module moves the shuttle, lintel, knob pointer and lamps on the site's one clock.
+import figure from '../generated/scope-gate.json';
+import '../../figure/kit/iso.css';
+---
+<div class="iso sg" data-scope-gate>
+  <Fragment set:html={figure.html} />
+</div>
+
+<script>
+  import { onPage } from '../engine';
+  import { mountScopeGate } from '../motion/scope-gate';
+  onPage(() => {
+    const root = document.querySelector<HTMLElement>('[data-scope-gate]');
+    if (!root) return;
+    return mountScopeGate(root);
+  });
+</script>
+
+<style is:global>
+  .sg.iso {
+    /* anatomy tones, shifted toward the ground's violet-blue so the solids belong to the page */
+    --anatomy-page: var(--c-bg);
+    --anatomy-card: var(--c-bg2);
+    --anatomy-text: var(--c-muted);
+    --anatomy-strong: var(--c-fg);
+    --anatomy-muted: var(--c-muted);
+    --anatomy-paper: #181825;
+    --anatomy-face: #20202f;
+    --anatomy-top: #232333;
+    --anatomy-shade-0: #121220;
+    --anatomy-shade-1: #161624;
+    --anatomy-shade-2: #1a1a29;
+    --anatomy-shade-3: #1e1e2e;
+    --anatomy-lit-top: #2f2a48;
+    --anatomy-lit-shade: #26233b;
+    --anatomy-hi: #cdd6f4;
+    --anatomy-mid: #6c7086;
+    --anatomy-lo: #45475a;
+    --anatomy-faint: #313244;
+    --anatomy-lit: #a78bfa;
+    --anatomy-halo: #07070d;
+    --anatomy-dot: #cdd6f4;
+    --anatomy-green: #00ff9d;
+    --anatomy-mono: var(--f-mono);
+  }
+  .sg .iso-figure { margin: 0; }
+  .sg .iso-plate { border-radius: var(--radius); box-shadow: 0 0 0 1px var(--c-line); padding: 56px 20px 52px; }
+  .sg .iso-plate-corner { font-size: 11px; color: var(--c-muted); }
+  .sg .iso-plate-corner[data-corner='fig'] { color: var(--c-lilac); }
+  .sg .iso-plate-corner[data-corner='readout'] { color: var(--c-fg); }
+  .sg .iso-legend { color: var(--c-muted); font-size: 13px; }
+  .sg .iso-stage { outline: none; border-radius: 4px; cursor: pointer; touch-action: pan-y; }
+  .sg .iso-stage:focus-visible { outline: 1px solid var(--c-violet); outline-offset: 6px; }
+  .sg .sg-lamp { transition: opacity 0.35s var(--anatomy-ease); }
+  .sg .sg-lamp[data-lamp='pass'] { fill: var(--c-green); filter: drop-shadow(0 0 3px var(--c-green)); }
+  .sg .sg-lamp[data-lamp='hold'] { fill: var(--c-yellow); filter: drop-shadow(0 0 3px var(--c-yellow)); }
+  .sg [data-part='exec'] { opacity: 0.18; transition: opacity 0.4s var(--anatomy-ease); }
+  .sg [data-part='exec'].is-on { opacity: 1; }
+  .sg [data-part='exec'].is-on circle { fill: var(--c-green); }
+  .sg [data-cart] { transition: opacity 0.35s var(--anatomy-ease); }
+  .sg .iso-swatch[data-mark='green'] path { stroke: var(--c-green); }
+  @media (max-width: 560px) {
+    .sg .iso-plate { padding: 48px 8px 70px; }
+    .sg .iso-plate-corner[data-corner='title'] { display: none; }
+  }
+</style>

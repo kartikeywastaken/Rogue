@@ -1,0 +1,12 @@
+---
+// First-load boot line, mimir style. Hooks: [data-loader-count], [data-loader-bar], [data-loader-out].
+import Rune from './Rune.astro';
+import { site } from '../data/site';
+---
+<div id="loader" role="status" aria-label="Loading">
+  <div class="loader__inner">
+    <span class="loader__line" data-loader-out><Rune class="loader__rune" /><span>rogue {site.version.text}</span></span>
+    <span class="loader__line loader__dim" data-loader-out>loading tools <span class="loader__count" data-loader-count>00/78</span></span>
+    <span class="loader__track" data-loader-out><span class="loader__bar" data-loader-bar></span></span>
+  </div>
+</div>

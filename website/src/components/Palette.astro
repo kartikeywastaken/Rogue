@@ -1,0 +1,14 @@
+---
+import CommandList from './CommandList.astro';
+---
+<dialog id="palette" class="palette" aria-label="Commands">
+  <div class="panel palette__panel">
+    <div class="prompt">
+      <span class="prompt__caret" aria-hidden="true">›</span>
+      <label class="sr-only" for="palette-input">Filter commands</label>
+      <input id="palette-input" class="prompt__input" type="text" autocomplete="off" spellcheck="false" value="/" data-cmd-filter="palette-list" />
+    </div>
+    <CommandList id="palette-list" />
+    <p class="palette__hint" aria-hidden="true">↑↓ choose · enter run · esc close</p>
+  </div>
+</dialog>

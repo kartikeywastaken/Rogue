@@ -1,0 +1,13 @@
+---
+// ᚱ Raidō ("ride, journey"), Rogue's mark, as mimir carries ᛗ. Drawn so it never falls back to tofu.
+interface Props { class?: string }
+const { class: cls = '' } = Astro.props;
+---
+<svg class={`rune ${cls}`} viewBox="0 0 8 12" aria-hidden="true">
+  <path d="M2 1 V11 M2 1 L6 3.6 L2 6.2 L6 11" />
+</svg>
+
+<style>
+  .rune { display: block; width: auto; height: 1em; overflow: visible; }
+  .rune path { fill: none; stroke: var(--c-green); stroke-width: 1.35; stroke-linecap: square; stroke-linejoin: miter; }
+</style>

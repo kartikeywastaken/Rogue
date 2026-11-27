@@ -1,0 +1,113 @@
+---
+import Base from '../layouts/Base.astro';
+import Wordmark from '../components/Wordmark.astro';
+import Rune from '../components/Rune.astro';
+import CommandList from '../components/CommandList.astro';
+import ScopeGate from '../components/ScopeGate.astro';
+import Finale from '../components/Finale.astro';
+import { site, trace, statement, arsenal, gate, stages, stageColor } from '../data/site';
+---
+<Base description={site.description}>
+  <!-- 1 · Hero: mimir's centred console -->
+  <section class="hero" data-stage="START" aria-labelledby="hero-title">
+    <div class="hero__brand">
+      <Rune class="hero__rune" />
+      <h1 id="hero-title" class="hero__title">
+        <span class="sr-only">Rogue, an AI harness for offensive security</span>
+        <Wordmark class="hero__mark" />
+      </h1>
+      <p class="hero__tag" data-intro-line>{site.tagline}</p>
+      <p class="hero__strap" data-intro-line>{site.strap.join('  •  ')}</p>
+    </div>
+
+    <div class="panel panel--violet hero__prompt" data-intro-panel>
+      <div class="prompt">
+        <span class="prompt__caret" aria-hidden="true">›</span>
+        <label class="sr-only" for="hero-input">Filter commands</label>
+        <input id="hero-input" class="prompt__input" type="text" autocomplete="off" spellcheck="false" placeholder="type / to filter commands" data-cmd-filter="hero-list" />
+      </div>
+      <CommandList id="hero-list" class="cmds--hero" />
+    </div>
+
+    <div class="panel hero__trace" data-intro-panel>
+      <p class="trace__title" id="trace-title">LATEST ACTIVITY</p>
+      <ol class="trace" data-trace aria-labelledby="trace-title">
+        {trace.slice(0, 3).map((t) => (
+          <li class="trace__row" style={`--c:${stageColor[t.stage]}`}><span class="trace__stage">{t.stage}</span><span class="trace__detail">{t.detail}</span></li>
+        ))}
+      </ol>
+      <script type="application/json" data-trace-script set:html={JSON.stringify(trace.map((t) => ({ ...t, color: stageColor[t.stage] })))} />
+    </div>
+    <a class="hero__down" href="#why"><span class="hero__down-text">scroll to run an engagement</span> <span aria-hidden="true">↓</span></a>
+  </section>
+
+  <!-- 2 · Statement -->
+  <section class="statement grid" id="why" data-stage="START" aria-labelledby="why-title">
+    <h2 class="statement__lead" id="why-title" data-split="lines">{statement.lead} <span class="statement__rest">{statement.rest}</span></h2>
+    <p class="statement__body" data-reveal="up">{statement.body}</p>
+    <p class="statement__meta" data-reveal="fade" data-delay="0.15"><span class="statement__count">{site.toolCount}</span> tools behind one gate</p>
+  </section>
+
+  <!-- 3 · Arsenal index -->
+  <section class="arsenal" data-stage="RECON" aria-labelledby="arsenal-title">
+    <header class="section-head grid">
+      <h2 class="section-title" id="arsenal-title" data-split="lines">The arsenal</h2>
+      <p class="section-lede" data-reveal="up">Six families, one calling convention. Pick a command to open its family.</p>
+    </header>
+    <ul class="index" role="list">
+      {arsenal.map((f) => (
+        <li class="index__item" data-reveal="fade">
+          <a class="index__row" href={`/arsenal#${f.cmd.slice(1)}`}>
+            <span class="cmd__flood" aria-hidden="true"></span>
+            <span class="cmd__marker" aria-hidden="true">›</span>
+            <span class="index__cmd">{f.cmd}</span>
+            <span class="index__what">{f.what}</span>
+            <span class="index__eg"><span class="index__eg-label">e.g.</span> <code>{f.example}</code></span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <!-- 4 · The scope gate (anatomy figure) -->
+  <section class="gate grid" id="gate" data-stage="SCOPE" aria-labelledby="gate-title">
+    <div class="gate__copy">
+      <h2 class="section-title" id="gate-title" data-split="lines">{gate.title}</h2>
+      <p class="gate__lead" data-reveal="up">{gate.lead}</p>
+      <p data-reveal="up" data-delay="0.08">{gate.body}</p>
+      <p class="gate__try" data-reveal="up" data-delay="0.16"><span class="gate__try-mark" aria-hidden="true">›</span> {gate.try}</p>
+      <p class="gate__note" data-reveal="fade" data-delay="0.2">{gate.note}</p>
+    </div>
+    <div class="gate__figure" data-reveal="fade">
+      <ScopeGate />
+    </div>
+  </section>
+
+  <!-- 5 · One engagement (the driver) -->
+  <section class="engage grid" id="engagement" aria-labelledby="engage-title">
+    <div class="engage__stick">
+      <h2 class="section-title" id="engage-title">One engagement, five stages</h2>
+      <div class="panel engage__panel">
+        <p class="trace__title">DECISION TRACE</p>
+        <ol class="trace trace--big" data-engage-trace>
+          {stages.map((s, i) => (
+            <li class="trace__row" data-engage-row={i} style={`--c:${stageColor[s.stage]}`}><span class="trace__stage">{s.stage}</span><span class="trace__detail">{s.line}</span></li>
+          ))}
+        </ol>
+        <div class="engage__meter" aria-hidden="true"><span class="engage__fill" data-engage-fill></span></div>
+      </div>
+    </div>
+    <ol class="engage__chapters">
+      {stages.map((s, i) => (
+        <li class="chapter" data-stage={s.stage} data-chapter={i} style={`--c:${stageColor[s.stage]}`}>
+          <p class="chapter__stage">{String(i + 1).padStart(2, '0')} <span>{s.stage}</span></p>
+          <h3 class="chapter__title">{s.title}</h3>
+          <p class="chapter__body">{s.body}</p>
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <!-- 6 · Finale -->
+  <Finale />
+</Base>

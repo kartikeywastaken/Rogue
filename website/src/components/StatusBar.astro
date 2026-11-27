@@ -1,0 +1,17 @@
+---
+// mimir's footer: mode and stage on the left, status and "/ commands" on the right.
+import Rune from './Rune.astro';
+---
+<nav class="bar" aria-label="Site">
+  <a class="bar__home" href="/" data-nav="/"><Rune class="bar__rune" /><span class="bar__name">ROGUE</span></a>
+  <span class="bar__sep" aria-hidden="true">•</span>
+  <span class="bar__stage" data-stage-label aria-hidden="true">START</span>
+  <ul class="bar__links">
+    <li><a href="/arsenal" data-nav="/arsenal" class="bar__link"><span class="bar__roll" data-text="/arsenal">/arsenal</span></a></li>
+    <li><a href="/boundaries" data-nav="/boundaries" class="bar__link"><span class="bar__roll" data-text="/boundaries">/boundaries</span></a></li>
+  </ul>
+  <span class="bar__status" aria-hidden="true"><span class="bar__dot">●</span> <span data-status>Ready</span></span>
+  <button type="button" class="bar__cmd" data-palette-open aria-haspopup="dialog" aria-controls="palette">
+    <span class="bar__key" aria-hidden="true">/</span><span class="bar__cmd-label">commands</span><span class="sr-only"> (open the command palette)</span>
+  </button>
+</nav>

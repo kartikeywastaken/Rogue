@@ -1,0 +1,44 @@
+---
+// Block wordmark in mimir's half-block style (█ ▀ ▄), drawn as SVG pixels so it is identical
+// on every device. Each pair of pixel rows is one terminal line: data-line 0..2 prints in steps.
+interface Props { text?: string; class?: string; label?: string }
+const { text = 'ROGUE', class: cls = '', label } = Astro.props;
+
+const FONT: Record<string, string[]> = {
+  R: ['###', '#.#', '##.', '#.#', '#.#'],
+  O: ['###', '#.#', '#.#', '#.#', '###'],
+  G: ['###', '#..', '#.#', '#.#', '###'],
+  U: ['#.#', '#.#', '#.#', '#.#', '###'],
+  E: ['###', '#..', '###', '#..', '###'],
+  H: ['#.#', '#.#', '###', '#.#', '#.#'],
+  L: ['#..', '#..', '#..', '#..', '###'],
+  D: ['##.', '#.#', '#.#', '#.#', '##.'],
+  ' ': ['...', '...', '...', '...', '...'],
+};
+const letters = [...text.toUpperCase()].map((c) => FONT[c] ?? FONT[' ']);
+const width = letters.length * 4 - 1;
+const rows: { x: number; y: number; w: number }[][] = [[], [], [], [], []];
+letters.forEach((glyph, i) => {
+  glyph.forEach((row, y) => {
+    // merge runs into one rect per row segment (fewer nodes, no seams)
+    let run = -1;
+    for (let x = 0; x <= row.length; x++) {
+      const on = row[x] === '#';
+      if (on && run < 0) run = x;
+      if (!on && run >= 0) { rows[y].push({ x: i * 4 + run, y, w: x - run }); run = -1; }
+    }
+  });
+});
+const lines = [[0, 1], [2, 3], [4]];
+---
+<svg class={`wordmark ${cls}`} viewBox={`0 0 ${width} 5`} role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : 'true'} shape-rendering="crispEdges" preserveAspectRatio="xMidYMid meet">
+  {lines.map((ys, line) => (
+    <g data-line={line}>
+      {ys.flatMap((y) => rows[y].map((r) => <rect x={r.x} y={r.y} width={r.w} height="1.02" />))}
+    </g>
+  ))}
+</svg>
+
+<style>
+  .wordmark { display: block; width: 100%; height: auto; fill: var(--c-lilac); overflow: visible; }
+</style>

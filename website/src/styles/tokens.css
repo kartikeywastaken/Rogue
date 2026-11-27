@@ -1,0 +1,64 @@
+/* Rogue tokens. Palette inherited from mimir's lipgloss theme (see DESIGN.md). */
+@font-face {
+  font-family: 'Martian Mono';
+  src: url('/fonts/martian-mono-100_800-normal.woff2') format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Host Grotesk';
+  src: url('/fonts/host-grotesk-300_800-normal.woff2') format('woff2');
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  /* mimir roles */
+  --c-bg: #11111b;       /* colorBgPurple */
+  --c-bg2: #181825;      /* colorCardPurple */
+  --c-field: #1e1e2e;    /* colorInputBg */
+  --c-sel: #2a283e;      /* colorSelected */
+  --c-fg: #cdd6f4;       /* colorWhite */
+  --c-muted: #9399b2;    /* AA on ground; mimir's #6C7086 is kept for hairlines only */
+  --c-dim: #6c7086;
+  --c-line: #45475a;     /* colorBorderDim */
+  --c-violet: #7d56f4;   /* colorBorderPurple */
+  --c-lilac: #a78bfa;    /* colorLogoPurple */
+  --c-green: #00ff9d;
+  --c-cyan: #00d7d7;
+  --c-yellow: #f9e2af;
+  --c-rose: #f38ba8;
+  --c-accent: var(--c-violet);
+  --c-curtain: var(--c-bg2);
+  --stage: var(--c-green); /* the driver writes this on <html> */
+
+  --f-display: 'Martian Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --f-mono: 'Martian Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --f-body: 'Host Grotesk', ui-sans-serif, system-ui, sans-serif;
+
+  --t-mega: clamp(3rem, 0.6rem + 11vw, 11rem);
+  --t-xl: clamp(2rem, 1.1rem + 3.9vw, 4.75rem);
+  --t-l: clamp(1.5rem, 1.05rem + 1.9vw, 2.75rem);
+  --t-m: clamp(1.125rem, 1rem + 0.55vw, 1.5rem);
+  --t-body: clamp(1rem, 0.95rem + 0.2vw, 1.125rem);
+  --t-s: 0.875rem;
+  --t-xs: 0.75rem;
+
+  --u: clamp(0.5rem, 0.35rem + 0.6vw, 1rem);
+  --gutter: clamp(1rem, 0.6rem + 1.6vw, 2.5rem);
+  --cols: 12;
+  --bar: 2.75rem; /* status bar height */
+
+  --radius: 8px; /* the one radius rule: panels only */
+
+  --z-gl: 0;
+  --z-content: 1;
+  --z-header: 50;
+  --z-palette: 70;
+  --z-cursor: 80;
+  --z-curtain: 90;
+  --z-loader: 100;
+}

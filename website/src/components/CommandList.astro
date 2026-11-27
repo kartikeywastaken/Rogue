@@ -1,0 +1,28 @@
+---
+// mimir's slash list: "/name   description", the selected row floods #2A283E with a › marker.
+import { commands } from '../data/site';
+interface Props { id: string; class?: string }
+const { id, class: cls = '' } = Astro.props;
+---
+<ul class={`cmds ${cls}`} id={id} data-cmds>
+  {commands.map((c) => (
+    <li data-cmd={c.name}>
+      {'href' in c ? (
+        <a class="cmd" href={c.href} {...('external' in c ? { target: '_blank', rel: 'noopener' } : {})} data-cmd-run>
+          <span class="cmd__flood" aria-hidden="true"></span>
+          <span class="cmd__marker" aria-hidden="true">›</span>
+          <span class="cmd__name">{c.name}</span>
+          <span class="cmd__desc">{c.desc}{'external' in c ? <span class="sr-only"> (opens in a new tab)</span> : null}</span>
+        </a>
+      ) : (
+        <button type="button" class="cmd" data-action={c.action} data-cmd-run>
+          <span class="cmd__flood" aria-hidden="true"></span>
+          <span class="cmd__marker" aria-hidden="true">›</span>
+          <span class="cmd__name">{c.name}</span>
+          <span class="cmd__desc">{c.desc}</span>
+        </button>
+      )}
+    </li>
+  ))}
+  <li class="cmds__empty" hidden>No matching commands</li>
+</ul>

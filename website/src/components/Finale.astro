@@ -1,0 +1,27 @@
+---
+import Wordmark from './Wordmark.astro';
+import { site } from '../data/site';
+interface Props { heading?: string }
+const { heading = 'Clone it. Point it at a lab.' } = Astro.props;
+---
+<footer class="finale" data-stage="FIND" aria-labelledby="finale-title">
+  <div class="finale__grid grid">
+    <h2 class="finale__title" id="finale-title" data-split="lines">{heading}</h2>
+    <div class="panel panel--violet finale__clone" data-reveal="up">
+      <p class="finale__label">INSTALL</p>
+      <div class="finale__cmdline">
+        <code class="finale__code"><span class="finale__prompt" aria-hidden="true">$ </span><span data-clone-text>{site.clone}</span></code>
+        <button type="button" class="btn" data-action="clone"><span class="btn__fill" aria-hidden="true"></span><span class="btn__label" data-clone-label>copy</span></button>
+      </div>
+      <p class="finale__then"><span aria-hidden="true">› </span>then <code>go build</code> and run <code>./rogue</code></p>
+    </div>
+    <ul class="finale__links" role="list">
+      <li><a class="finale__link" href={site.repo.href} target="_blank" rel="noopener">Source on GitHub<span class="sr-only"> (opens in a new tab)</span></a></li>
+      <li><a class="finale__link" href="/arsenal">The arsenal</a></li>
+      <li><a class="finale__link" href="/boundaries">Boundaries</a></li>
+    </ul>
+    <p class="finale__legal">Use Rogue only against systems you own or are authorised in writing to test.</p>
+  </div>
+  <div class="finale__mark" aria-hidden="true"><Wordmark /></div>
+  <p class="finale__small grid"><span>{site.sibling.note}</span><span>Figure built with anatomy</span></p>
+</footer>
