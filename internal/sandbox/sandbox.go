@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Executor runs bounded scripts in a controlled environment.
+// Executor runs bounded scripts in an OS-confined environment.
 type Executor struct {
 	// WorkDir is the temp workspace directory for scripts. Created lazily.
 	WorkDir string
@@ -26,26 +26,39 @@ type Executor struct {
 	MaxStderr int
 	// Timeout is the maximum execution time for a single script.
 	Timeout time.Duration
-	// AllowNetwork enables network access in scripts (default: false).
+	// AllowNetwork enables outbound network access in scripts (default: false).
 	AllowNetwork bool
+	// AllowLoopback enables loopback TCP access when AllowNetwork is false
+	// (used for scoped local lab PoC verification).
+	AllowLoopback bool
+	// LoopbackPort, when positive with AllowLoopback, restricts loopback access
+	// on Darwin to that single localhost port.
+	LoopbackPort int
+	// AllowUnconfined permits falling back to host execution when OS
+	// confinement is unavailable (default: false; fail closed).
+	AllowUnconfined bool
 
-	once sync.Once
+	once    sync.Once
+	workErr error
 }
 
 // Result holds the output of a script execution.
 type Result struct {
-	Stdout   string        `json:"stdout"`
-	Stderr   string        `json:"stderr"`
-	ExitCode int           `json:"exit_code"`
-	Duration time.Duration `json:"duration_ms"`
-	Killed   bool          `json:"killed"`
+	Stdout      string        `json:"stdout"`
+	Stderr      string        `json:"stderr"`
+	ExitCode    int           `json:"exit_code"`
+	Duration    time.Duration `json:"duration_ms"`
+	Killed      bool          `json:"killed"`
+	Confined    bool          `json:"confined"`
+	Confinement string        `json:"confinement,omitempty"`
 }
 
-// DefaultExecutor returns an Executor with safe defaults.
+// DefaultExecutor returns an Executor with safe defaults (network disabled,
+// filesystem writes confined to WorkDir, fail-closed confinement).
 func DefaultExecutor() *Executor {
 	return &Executor{
-		MaxOutput: 2 * 1024 * 1024,  // 2 MiB
-		MaxStderr: 16 * 1024,        // 16 KiB
+		MaxOutput: 2 * 1024 * 1024,   // 2 MiB
+		MaxStderr: 16 * 1024,         // 16 KiB
 		Timeout:   120 * time.Second, // 2 minutes
 	}
 }
@@ -83,15 +96,56 @@ func DockerAvailable() error {
 }
 
 func (e *Executor) ensureWorkDir() error {
-	var err error
 	e.once.Do(func() {
 		if e.WorkDir == "" {
-			e.WorkDir, err = os.MkdirTemp("", "rogue-sandbox-*")
+			dir, err := os.MkdirTemp("", "rogue-sandbox-*")
+			if err != nil {
+				e.workErr = err
+				return
+			}
+			e.WorkDir = dir
 		} else {
-			err = os.MkdirAll(e.WorkDir, 0o700)
+			if err := os.MkdirAll(e.WorkDir, 0o700); err != nil {
+				e.workErr = err
+				return
+			}
 		}
+		abs, err := filepath.Abs(e.WorkDir)
+		if err != nil {
+			e.workErr = err
+			return
+		}
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if isUnsafeWorkDir(abs) {
+			e.workErr = fmt.Errorf("refusing broad sandbox WorkDir %q", abs)
+			return
+		}
+		e.WorkDir = abs
 	})
-	return err
+	return e.workErr
+}
+
+func isUnsafeWorkDir(dir string) bool {
+	clean := filepath.Clean(dir)
+	sysTmp := filepath.Clean(os.TempDir())
+	if resolved, err := filepath.EvalSymlinks(sysTmp); err == nil {
+		sysTmp = resolved
+	}
+	switch clean {
+	case "/", "/tmp", "/private", "/private/tmp", "/var", "/private/var", "/usr", "/etc", "/Users", "/home", sysTmp:
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if resolved, err := filepath.EvalSymlinks(home); err == nil {
+			home = resolved
+		}
+		if clean == filepath.Clean(home) {
+			return true
+		}
+	}
+	return false
 }
 
 // WriteFile writes a file to the sandbox workspace. Only files inside the
@@ -106,6 +160,9 @@ func (e *Executor) WriteFile(name, content string) (string, error) {
 		return "", errors.New("invalid filename: must be a simple basename with no path separators")
 	}
 	full := filepath.Join(e.WorkDir, base)
+	if info, err := os.Lstat(full); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("refusing to write through symlink in sandbox workspace")
+	}
 	if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
 		return "", err
 	}
@@ -177,18 +234,31 @@ func (e *Executor) execScript(ctx context.Context, interpreter, script string) (
 		"LC_ALL=C",
 		"HOME=" + e.WorkDir,
 		"TMPDIR=" + e.WorkDir,
+		"PYTHONDONTWRITEBYTECODE=1",
 	}
 	cmd.WaitDelay = time.Second
 
-	// Apply OS-level confinement when available. This enforces filesystem
-	// isolation (writes only within workDir) and network blocking when
-	// AllowNetwork is false, using sandbox-exec on macOS or bwrap on Linux.
-	if confinementAvailable() {
-		confined, confErr := confineCommand(execCtx, cmd, e.WorkDir, e.AllowNetwork)
+	backend := "unconfined"
+	var confineCleanup func()
+	if err := ConfinementAvailable(); err == nil {
+		cfg := confinementConfig{
+			WorkDir:       e.WorkDir,
+			AllowNetwork:  e.AllowNetwork,
+			AllowLoopback: e.AllowLoopback,
+			LoopbackPort:  e.LoopbackPort,
+		}
+		confined, cleanup, bname, confErr := confineCommand(execCtx, cmd, cfg)
 		if confErr != nil {
 			return nil, fmt.Errorf("sandbox confinement setup failed: %w", confErr)
 		}
 		cmd = confined
+		confineCleanup = cleanup
+		backend = bname
+	} else if !e.AllowUnconfined {
+		return nil, fmt.Errorf("sandbox confinement unavailable (fail-closed): %w", err)
+	}
+	if confineCleanup != nil {
+		defer confineCleanup()
 	}
 
 	start := time.Now()
@@ -196,9 +266,11 @@ func (e *Executor) execScript(ctx context.Context, interpreter, script string) (
 	dur := time.Since(start)
 
 	res := &Result{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		Duration: dur,
+		Stdout:      stdout.String(),
+		Stderr:      stderr.String(),
+		Duration:    dur,
+		Confined:    backend != "unconfined",
+		Confinement: backend,
 	}
 
 	if runErr != nil {

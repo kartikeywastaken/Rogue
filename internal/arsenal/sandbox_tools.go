@@ -39,7 +39,10 @@ func pythonExecTool(exec *sandbox.Executor) *Tool {
 			if !sandboxEnabled() {
 				return errors.New("ROGUE_SANDBOX=true required for code execution")
 			}
-			return sandbox.Available("python3")
+			if err := sandbox.Available("python3"); err != nil {
+				return err
+			}
+			return sandbox.ConfinementAvailable()
 		},
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"script":  map[string]any{"type": "string", "description": "Python3 script source code to execute"},
@@ -72,12 +75,14 @@ func pythonExecTool(exec *sandbox.Executor) *Tool {
 			}
 
 			data := map[string]any{
-				"exit_code": res.ExitCode,
-				"stdout":    clipOutput(res.Stdout, 32768),
-				"stderr":    clipOutput(res.Stderr, 4096),
-				"duration":  res.Duration.String(),
-				"killed":    res.Killed,
-				"purpose":   args.Purpose,
+				"exit_code":   res.ExitCode,
+				"stdout":      clipOutput(res.Stdout, 32768),
+				"stderr":      clipOutput(res.Stderr, 4096),
+				"duration":    res.Duration.String(),
+				"killed":      res.Killed,
+				"confined":    res.Confined,
+				"confinement": res.Confinement,
+				"purpose":     args.Purpose,
 			}
 
 			summary := fmt.Sprintf("Python script executed (exit %d, %s)", res.ExitCode, res.Duration.Round(time.Millisecond))
@@ -102,7 +107,10 @@ func bashExecTool(exec *sandbox.Executor) *Tool {
 			if !sandboxEnabled() {
 				return errors.New("ROGUE_SANDBOX=true required for code execution")
 			}
-			return sandbox.Available("bash")
+			if err := sandbox.Available("bash"); err != nil {
+				return err
+			}
+			return sandbox.ConfinementAvailable()
 		},
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"script":  map[string]any{"type": "string", "description": "Bash script source code to execute"},
@@ -135,12 +143,14 @@ func bashExecTool(exec *sandbox.Executor) *Tool {
 			}
 
 			data := map[string]any{
-				"exit_code": res.ExitCode,
-				"stdout":    clipOutput(res.Stdout, 32768),
-				"stderr":    clipOutput(res.Stderr, 4096),
-				"duration":  res.Duration.String(),
-				"killed":    res.Killed,
-				"purpose":   args.Purpose,
+				"exit_code":   res.ExitCode,
+				"stdout":      clipOutput(res.Stdout, 32768),
+				"stderr":      clipOutput(res.Stderr, 4096),
+				"duration":    res.Duration.String(),
+				"killed":      res.Killed,
+				"confined":    res.Confined,
+				"confinement": res.Confinement,
+				"purpose":     args.Purpose,
 			}
 
 			summary := fmt.Sprintf("Bash script executed (exit %d, %s)", res.ExitCode, res.Duration.Round(time.Millisecond))

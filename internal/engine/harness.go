@@ -25,6 +25,8 @@ import (
 type Options struct {
 	// SingleOperator retains a measurable Recon baseline for comparison runs.
 	SingleOperator bool
+	// Operator selects the operator archetype used when SingleOperator is true (default: ArchRecon).
+	Operator       domain.Archetype
 	Concurrency    int
 	Cooldown       time.Duration
 	ContextBytes   int
@@ -254,7 +256,15 @@ func (harness *Harness) runSingle(parent context.Context, request Request, outpu
 		terminate(err)
 		return
 	}
-	profile := operator.Profiles()[domain.ArchRecon]
+	role := harness.opts.Operator
+	if role == "" {
+		role = domain.ArchRecon
+	}
+	profile, ok := operator.Profiles()[role]
+	if !ok {
+		terminate(fmt.Errorf("unknown single-operator role %q", role))
+		return
+	}
 	if err := state.Comms.Join(profile.Callsign); err != nil {
 		terminate(err)
 		return

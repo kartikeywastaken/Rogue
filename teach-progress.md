@@ -574,8 +574,47 @@ unverified in this environment because no keys or model are configured.
   build a new engine through Connect instead of just removing that check?"
   Asked 2026-11-24. Awaiting learner.
 
+### Scope extension — Role reachability & fail-closed sandbox confinement (2026-11-27)
+- Operator reachability (`internal/operator/operator.go`, `internal/engine/harness.go`,
+  `internal/arsenal/arsenal.go`, `internal/arsenal/policy.go`):
+  - `ArchExploiter` (`BREACH`) now permits `"exploit"` and `"ctf"`; `ArchInfiltrator`
+    (`SHADOW`) and `ArchScanner` (`ARGUS`) permit `"exploit"`.
+  - `engine.Options.Operator` lets `SingleOperator` quick/single-role runs select an
+    archetype other than the default `ArchRecon` baseline.
+  - `Registry.Exec` passes an unexported context marker (`withActiveAuthorized`) for
+    non-internal tools whose single-use approval was consumed by `authorize`, so
+    `authorizeActive` does not fail by trying to consume the same single-use grant
+    twice in `ModeDefault` (`Harness.ExecuteTool` / interactive approval). Direct
+    `tool.Execute` calls without `Registry.Exec` and `Internal: true` research organs
+    still go through full `authorizeActive` checks.
+- OS-enforced sandbox isolation (`internal/sandbox/sandbox.go`, `internal/sandbox/confine.go`,
+  `internal/sandbox/docker.go`, `internal/arsenal/exploit_tools.go`,
+  `internal/arsenal/sandbox_tools.go`):
+  - `Executor` canonicalizes `WorkDir` via `filepath.EvalSymlinks` (avoiding `/var`
+    vs `/private/var` mismatch on macOS) and wraps scripts in OS-level confinement:
+    macOS `sandbox-exec` Seatbelt profile on `darwin`, Linux `bwrap` with `--unshare-net`
+    and bind mounts on `linux`, failing closed when confinement is unavailable unless
+    `AllowUnconfined` is set.
+  - `python_exec` and `bash_exec` default to `AllowNetwork=false` and `AllowLoopback=false`
+    with writes/reads outside `WorkDir` denied by kernel sandbox rules.
+  - `exploit_verify` restricts network access either to the target's loopback port
+    (`AllowLoopback=true, LoopbackPort=<port>`) or full network only after `activeURL`
+    + `authorizeActive` validate non-loopback `ROGUE_ACTIVE=true` scope.
+  - Added integration tests (`internal/engine/exploit_ctf_policy_test.go`,
+    `internal/sandbox/confine_test.go`, `internal/arsenal/exploit_sandbox_test.go`).
+- Added stage:
+  - [ ] T7. Role policy boundaries, single-use approval propagation, and OS-enforced
+    filesystem/network confinement (`sandbox-exec` / `bwrap` vs fail-closed).
+
+#### S3-T7-Q1 — two-hop policy vs OS confinement (pending)
+- Question: "Why couldn't we simply remove `authorizeActive` from `python_exec` /
+  `exploit_verify` instead of passing an unexported context marker from `Registry.Exec`,
+  and on macOS why must `Executor.ensureWorkDir()` run `filepath.EvalSymlinks` before
+  generating the Seatbelt `.sb` profile?"
+  Asked 2026-11-27. Awaiting learner.
+
 ### Current position (Session 3)
-- Status: awaiting learner. Pending: S3-B0 (deferred), S3-T4-Q1, S3-T5-Q1, S3-T6-Q1.
-  Learner has moved through three feature requests without answering; keep
+- Status: awaiting learner. Pending: S3-B0 (deferred), S3-T4-Q1, S3-T5-Q1, S3-T6-Q1, S3-T7-Q1.
+  Learner has moved through feature requests without answering; keep
   offering one question per change, never block work on it.
   Session 2's S1-Q1 is still pending separately.

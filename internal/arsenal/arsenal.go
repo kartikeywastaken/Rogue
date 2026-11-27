@@ -114,8 +114,12 @@ func (r *Registry) Exec(ctx context.Context, name string, args json.RawMessage) 
 	if err := authorize(ctx, t, args); err != nil {
 		return nil, err
 	}
+	execCtx := ctx
+	if !t.Internal {
+		execCtx = withActiveAuthorized(ctx, t.Name)
+	}
 	start := time.Now()
-	res, err := t.Execute(ctx, args)
+	res, err := t.Execute(execCtx, args)
 	if err != nil {
 		return &Result{Success: false, Summary: err.Error(), Error: err.Error(), Dur: time.Since(start)}, err
 	}

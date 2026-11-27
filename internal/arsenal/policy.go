@@ -23,9 +23,19 @@ type Policy struct {
 	Lab        bool
 }
 type policyKey struct{}
+type activeAuthKey struct{}
 
 func WithPolicy(ctx context.Context, p Policy) context.Context {
 	return context.WithValue(ctx, policyKey{}, p)
+}
+
+func withActiveAuthorized(ctx context.Context, tool string) context.Context {
+	return context.WithValue(ctx, activeAuthKey{}, tool)
+}
+
+func activeAlreadyAuthorized(ctx context.Context, tool string) bool {
+	approvedTool, ok := ctx.Value(activeAuthKey{}).(string)
+	return ok && approvedTool == tool
 }
 
 func authorize(ctx context.Context, t *Tool, args json.RawMessage) error {
@@ -154,10 +164,14 @@ func scopedDial(ctx context.Context, network, address string) (net.Conn, error) 
 }
 
 // authorizeActive checks mission policy when an internal tool requests active
-// side effects (e.g. research organs with execute=true).
+// side effects (e.g. research organs with execute=true) or when a non-internal
+// tool validates its policy boundary directly.
 func authorizeActive(ctx context.Context, tool string, args json.RawMessage) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if activeAlreadyAuthorized(ctx, tool) {
+		return nil
 	}
 	p, ok := ctx.Value(policyKey{}).(Policy)
 	if !ok {

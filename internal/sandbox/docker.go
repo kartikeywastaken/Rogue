@@ -72,8 +72,10 @@ func (d *DockerRunner) StartChallenge(ctx context.Context, image string, contain
 		"--rm",
 		"--memory", mem,
 		"--cpus", cpus,
+		"--pids-limit", "256",
+		"--security-opt", "no-new-privileges",
 		"--network", net,
-		"-p", fmt.Sprintf("0:%d", containerPort), // random host port
+		"-p", fmt.Sprintf("127.0.0.1:0:%d", containerPort), // bind only on loopback
 		"--label", "rogue.ctf=true",
 		image,
 	}
